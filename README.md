@@ -30,7 +30,7 @@ $uv pip install onnxruntime-gpu --no-config
 $git clone 
 $cd ppx
 $uv venv -p 3.12
-$uv sync
+$uv sync --no-install-project
 #如果需要使用gpu，如果系统中已经全局安装，可以不安装，或者安装另外的版本
 $uv sync --extra cuda
 
@@ -43,12 +43,12 @@ $uv pip install onnxruntime --no-config
 
 
 #默认解析
-$ppx parse a.pdf
+$./app parse a.pdf
 
 #使用大模型解析，如果模型的base_url,model,api_key 和默认设置不一样，可以在命令行中指定，或者在./conf/settings.py中
-$ppx parse a.pdf --backend deepseek --deepseek '{"base_url":"http://127.0.0.1:4000/v1","model":"deepseek-ocr-2","api_key":""}'
-$ppx parse a.pdf --backend paddle   --paddle  '{"base_url":"http://127.0.0.1:4001/v1","model":"paddleocr-vl","api_key":""}'
-$ppx parse a.pdf --backend glm      --glm  '{"base_url":"http://127.0.0.1:4002/v1","model":"glmocr","api_key":""}'
+$./app parse a.pdf --backend deepseek --deepseek '{"base_url":"http://127.0.0.1:4000/v1","model":"deepseek-ocr-2","api_key":""}'
+$./app parse a.pdf --backend paddle   --paddle  '{"base_url":"http://127.0.0.1:4001/v1","model":"paddleocr-vl","api_key":""}'
+$./app parse a.pdf --backend glm      --glm  '{"base_url":"http://127.0.0.1:4002/v1","model":"glmocr","api_key":""}'
 
 
 #如果经常使用，可以写到配置文件中
