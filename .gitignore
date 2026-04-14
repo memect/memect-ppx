@@ -10,6 +10,8 @@
 !/README.md
 !/README_zh-CN.md
 !/docs/
+!/LICENSE
+!/MS_CLA.md
 !/pyproject.toml
 !/.gitignore
 !/.dockerignore
