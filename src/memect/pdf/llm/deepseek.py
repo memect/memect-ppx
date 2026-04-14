@@ -172,7 +172,7 @@ class Deepseek:
             type_ = normalize_type(m.group(2))
             bboxes = parse_bboxes(m.group(3))           
             if len(bboxes)==0:
-                self._logger.warning('第%s页，没有获得bbox:',page.number,m.group())
+                self._logger.warning('第%s页，没有获得bbox:%s',page.number,m.group())
                 page.objects.append(KMarkdown(page,BBox(0,0,0,0).to_quad(),text=text))
             else:
                 if len(bboxes)>1:
