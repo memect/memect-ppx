@@ -8,6 +8,8 @@
 !/docker-entrypoint.sh
 !/Dockerfile
 !/README.md
+!/README_zh-CN.md
+!/docs/
 !/pyproject.toml
 !/.gitignore
 !/.dockerignore
