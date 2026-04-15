@@ -6,8 +6,9 @@ build-backend = "setuptools.build_meta"
 target-version = "py312"
 
 [project]
-name = 'ppx'
-version = '0.1'
+name = 'memect-ppx'
+description = 'memect-ppx 是一个 PDF / 图片文档解析工具，将输入文件转换为结构化的 Markdown、JSON、DOCX、PPTX 或 HTML。支持本地模型（默认）和多种 LLM 后端（DeepSeek、PaddleOCR、GLM等），适用于高精度文档理解场景。'
+version = '0.0.1'
 requires-python = ">= 3.12"
 dependencies = [
     "anyio>=4.12.1",
