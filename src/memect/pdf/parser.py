@@ -1,17 +1,22 @@
+from concurrent.futures import ProcessPoolExecutor
 import logging
 import signal
 import sys
 from pathlib import Path
+from threading import Thread
+import time
 from types import FrameType, TracebackType
-from typing import Any, Mapping, override
+from typing import Any, ClassVar, Iterable, Mapping, Self, Sized, override
 
 from pydantic import Field
+import multiprocessing as mp
 
+from memect.base import utils
 from memect.base.config import MPInit
 from memect.base.task import Runner, StoppedError, Task
 from memect.base.utils import MyBaseModel
 
-from .base import Backend, KDocument, ParseParams
+from .base import Backend, KDocument, KDocumentFactory, ParseParams
 from .default.parser import DefaultParser, DefaultParserArgs
 from .llm.deepseek import Deepseek, DeepseekArgs
 from .llm.glm import GLM, GLMArgs
@@ -179,6 +184,109 @@ class Parser:
             doc = KDocument(file=file, out_dir=out_dir, params=params)
             return p.parse(doc)
 
+
+
+    _mp_instance:ClassVar[Self|None]=None
+
+    @classmethod
+    def _mp_parse(cls,factory:KDocumentFactory):
+        assert cls._mp_instance is not None
+        doc = factory()
+        cls._mp_instance.parse(doc)
+        
+
+    @classmethod
+    def _mp_init(cls,args:Any,stopped:Any):
+        assert cls._mp_instance is None
+        def on_stop():
+            while True:
+                if stopped.value:
+                    ModelExecutor.shutdown()
+                    break
+                else:
+                    time.sleep(0.5)
+        
+        Thread(target=on_stop,daemon=True).start()
+
+        def on_signal(n:int,frame:FrameType|None):
+            cls._mp_instance=None
+            sys.exit(0)
+
+        #ctrl+c or kill -2 pid
+        signal.signal(signal.SIGINT,on_signal)
+        #kill pid
+        signal.signal(signal.SIGTERM,on_signal)
+
+        cls._mp_instance = cls(args)
+
+
+    @classmethod
+    def batch(cls,args:Any,docs:Iterable[KDocumentFactory],*,max_workers:int=0,timeout:float|None=None):
+        """
+        args:
+        docs:
+        max_workers:
+        timeout: 单个文件的最大解析时间
+        """
+        from memect.base.config import MPInit
+        timer = utils.Timer.start()
+        n=0
+        total=None
+        if isinstance(docs,Sized):
+            total=len(docs)
+        if max_workers==0:
+            for doc in docs:
+                cls(args).parse(doc())
+                n+=1
+                cls._logger.info('第[%s/%s]个解析成功',n,total)
+        else:
+            mp_context = mp.get_context('spawn')
+            mp_stopped = mp_context.Value('b',False)
+            mp_init = MPInit()
+            mp_init.set_fn(cls._mp_init,args,mp_stopped)
+
+            def kill_mp_processes(kill:bool,timeout:float|None=10):
+                #每次返回一个新的
+                children = mp_context.active_children()
+                cls._logger.info('start %s processes,size=%s','kill' if kill else 'terminate',len(children))
+                for p in children:
+                    cls._logger.info('start %s process=%s','kill' if kill else 'terminate',p.pid)
+                    if kill:
+                        p.kill()
+                    else:
+                        p.terminate()
+                
+                start_time = time.monotonic()
+                while timeout is None or time.monotonic()-start_time<timeout:
+                    i=0
+                    while i<len(children):
+                        p = children[i]
+                        if not p.is_alive():
+                            #如果进程退出后被其他方式读取了wait的状态，这个总是返回True的
+                            del children[i]
+                        else:
+                            i+=1
+                    if not children:
+                        break
+                    else:
+                        time.sleep(0.5)
+                
+                cls._logger.info('end %s processes,size=%s','kill' if kill else 'terminate',len(mp_context.active_children()))
+            
+            try:
+                with ProcessPoolExecutor(max_workers=max_workers,mp_context=mp_context,initializer=mp_init) as executor:
+                    for _ in executor.map(cls._mp_parse,docs):
+                        n+=1
+                        cls._logger.info('第[%s/%s]个解析成功',n,total)
+                    timer.mark('endparse')
+                    mp_stopped.value=True
+                    time.sleep(1)
+                    executor.shutdown(False)
+            finally:
+                #可能子进程还无法退出
+                kill_mp_processes(False,timeout=5)
+                kill_mp_processes(True,timeout=5)
+        cls._logger.info('结束解析，共解析：%s，耗时:%.3f',n,timer.elapsed(end='endparse'))
 
 class _ParseRunner(Runner):
     def __init__(self, parser: Parser, doc: KDocument):

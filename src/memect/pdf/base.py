@@ -618,7 +618,16 @@ class KDocument:
             buf.append(page.markdown())
         return "\n\n".join(buf)
 
-
+class KDocumentFactory:
+    def __init__(self,file:str|Path,params:Any,out_dir:Path|None=None):
+        super().__init__()
+        self.file:Final=file
+        self.params:Final=params
+        self.out_dir:Final=out_dir
+    
+    def __call__(self)->KDocument:
+        return KDocument(self.file,params=self.params,out_dir=self.out_dir)
+    
 class _LayoutObject(TypedDict):
     type: str
     bbox: NotRequired[Sequence[float]]

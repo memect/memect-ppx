@@ -5,6 +5,7 @@ import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Final, Mapping, Sequence, final, override
+import weakref
 
 import cv2
 import httpx
@@ -189,6 +190,22 @@ class ModelExecutor:
             args.name, self.execute, **args.scheduler.model_dump()
         )
 
+        weakref.finalize(self,self._close,self._executor,self._scheduler)
+    
+    @classmethod
+    def _close(cls,executor:Executor|None,scheduler:Scheduler[Any,Any]|None):
+        if executor:
+            executor.shutdown(False,cancel_futures=True)
+        if scheduler:
+            scheduler.close()
+    
+    def close(self):
+        self._close(self._executor,self._scheduler)
+        self._executor=None
+        self._scheduler=None
+        self._model=None
+
+
     def parse(
         self,
         doc: KDocument,
@@ -357,6 +374,15 @@ class ModelExecutor:
             cls.setup()
             assert cls._manager is not None
             return cls._manager.get_executor(name)
+    
+    @classmethod
+    def shutdown(cls):
+        with cls._manager_lock:
+            if cls._manager is None:
+                return
+            cls._manager.shutdown()
+            
+            
 
 
 class ModelManagerArgs(MyBaseModel):
@@ -397,6 +423,12 @@ class ModelManager:
 
     def get_executor(self, name: str) -> ModelExecutor:
         return self._executors[name]
+    
+    def shutdown(self):
+        executors = dict(self._executors)
+        self._executors.clear()
+        for name,executor in executors.items():
+            executor.close()
 
 
 class ApiModel(Model):
@@ -404,7 +436,7 @@ class ApiModel(Model):
 
     def __init__(self, port: int = 9527):
         super().__init__()
-        self._api = Api(**kwargs)
+        self._api = Api()
 
         self._client = None
         self._use_local = False

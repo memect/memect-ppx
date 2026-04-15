@@ -7,8 +7,7 @@ from typing import Annotated, Any
 import typer
 
 from .base.config import get_settings
-from .base.debug import XDebugger
-from .pdf.base import Backend, OCRMode, ParseMode, TableMode
+from .pdf.base import Backend,OCRMode, ParseMode, TableMode
 
 app = typer.Typer()
 
@@ -71,12 +70,16 @@ def start(
     App.run()
 
 
+
 @app.command()
 def parse(
     file: Annotated[Path, typer.Argument(help="PDF 文件、图片文件或图片目录")],
     out_dir: Annotated[
         Path | None, typer.Option("-o", "--out-dir", help="输出目录")
     ] = None,
+
+    max_workers:Annotated[int,typer.Option("-w","--workers",help='如果指定的file目录，可以设置同时执行多少个，0表示不使用多进程执行')]=0,
+
     pages: Annotated[str | None, typer.Option(help="页码范围，如 1-3,5")] = None,
     backend:Annotated[Backend|None,typer.Option()]=None,
 
@@ -112,7 +115,8 @@ def parse(
 ) -> None:
     """解析 PDF 文件"""
     from .base.config import setup
-    from .pdf.base import KDocument, ParseParams
+    from .base.debug import XDebugger
+    from .pdf.base import KDocument,KDocumentFactory,ParseParams
     from .pdf.parser import Parser
 
     def set_custom_values(settings:dict[str,Any],text:str|None,prefix:str):
@@ -163,9 +167,27 @@ def parse(
         params.markdown=md
     if doc_json is not None:
         params.doc_json=doc_json
-
-    doc = KDocument(file,params=params)
-    Parser(get_settings('pdf_parser')).parse(doc)
+    
+    if file.is_file():
+        #a.pdf => a.pdf.out 如果没有out_dir
+        doc = KDocument(file,params=params,out_dir=out_dir)
+        Parser(get_settings('pdf_parser')).parse(doc)
+    elif file.is_dir():
+        #表示为多个文件，需要并行吗？可能需要比较多的内存
+        def get_docs(dir_:Path):
+            for file in dir_.iterdir():
+                if file.is_file() and file.name[0]!='.' and file.suffix.lower() in ('.pdf','.png','.jpg','.jpeg','.webp','.bmp'):
+                    file_out_dir=None
+                    if out_dir is not None:
+                        #表示输出到这个目录，为了统一，同样添加".out"
+                        file_out_dir = out_dir.joinpath(file.name+'.out')
+                    yield KDocumentFactory(file,params,file_out_dir)
+                else:
+                    pass
+        #考虑到文件数不会太多，为了获得总数，使用list
+        Parser.batch(get_settings('pdf_parser'),list(get_docs(file)),max_workers=max_workers)
+    else:
+        pass
 
 
 
