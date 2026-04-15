@@ -1,5 +1,15 @@
 # 说明
 
+## 系统要求
+
+| 平台 | 要求 |
+|------|------|
+| Linux | Ubuntu **>= 20.04**（推荐 22.04 / 24.04），Python >= 3.12 |
+| macOS (Apple Silicon) | Python >= 3.12 |
+| macOS (Intel) | Python 3.12 ~ 3.13（受 OpenVINO 限制） |
+
+> GPU 加速需要 NVIDIA 驱动 + CUDA 12.x，并安装 `onnxruntime-gpu` 及 `memect-ppx[cuda]`。
+
 ## 安装
 
 ```bash
