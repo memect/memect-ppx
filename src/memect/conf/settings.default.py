@@ -32,7 +32,8 @@ def is_force_gpu() -> bool:
 
 
 def is_apple_silicon():
-    return platform.processor() == 'arm' and platform.system() == 'Darwin'
+    return platform.processor() == "arm" and platform.system() == "Darwin"
+
 
 _gpus: Final[dict[str, bool]] = {}
 
@@ -116,17 +117,19 @@ def get_ocr_engine() -> str:
     if use_gpu("onnxruntime"):
         return "onnxruntime"
     elif is_apple_silicon():
-        return 'onnxruntime'
+        return "onnxruntime"
     else:
-        #amd/intel,cpu下这个更快
+        # amd/intel,cpu下这个更快
         return "openvino"
 
+
 def get_cpu_engine():
-    #TODO 目前最底层还是都是使用cpu，还没有使用CoreML，这个有很多错误
+    # TODO 目前最底层还是都是使用cpu，还没有使用CoreML，这个有很多错误
     if is_apple_silicon():
-        return 'onnxruntime'
+        return "onnxruntime"
     else:
-        return 'openvino'
+        return "openvino"
+
 
 def get_model_path(file: str | Path) -> str | None:
     file = Path(file).absolute()
@@ -182,7 +185,7 @@ _paddle_layout_v2 = {
     # 还是先使用这个名字
     "aside_text": "other_text",
     # v2特有的，获得垂直书写的，如果是英文，通常还顺时针旋转90度
-    'vertical_text': 'text',
+    "vertical_text": "text",
     # 如：来源：xxxxx
     "vision_footnote": "text",
 }
@@ -238,7 +241,7 @@ settings: dict[str, Any] = {
     "model_manager": {
         # 如果为True，表示每一个都是使用api调用，不加载模型
         # "use_api":False,
-        "models": {
+        "executors": {
             "ocr": {
                 # 默认为True，False表示不加载
                 "enable": True,
@@ -250,41 +253,9 @@ settings: dict[str, Any] = {
                     # >=max_workers，如果大一些，可以减少调度的耗时
                     "max_task_size": 10,
                 },
-                "model": "mobile",
-                "settings": {
-                    # 这里的设置对应RapidOCR，然后必须使用具体的枚举类型，但是使用了这些，每次就必须载入RapidOCR这个库
-                    # 这个又直接载入cv2/numpy，导致在多进程下，有些不需要的，载入就变慢，所以这里还是使用字符串
-                    # 在这个模型中做转换处理
-                    "mobile": {
-                        "name": "RapidOCRModel",
-                        "kwargs": {
-                            "Global.model_root_dir": get_model_path("./models/ocr"),
-                            "Global.text_score": 0.5,
-                            # -1表示无论如何都det，否则w/h>width_height_ratio，就不det了，而是直接rec
-                            "Global.width_height_ratio": -1,
-                            "Det.engine_type": get_ocr_engine(),
-                            "Cls.engine_type": get_ocr_engine(),
-                            "Rec.engine_type": get_ocr_engine(),
-                            "Det.model_type": "mobile",
-                            "Cls.model_type": "mobile",
-                            "Rec.model_type": "mobile",
-                            # 表示下载目录
-                            #'Det.model_dir':'./models/ocr',
-                            # 表示模型文件
-                            #'Det.model_path':'',
-                            #'Cls.model_path':'',
-                            #'Rec.model_path':'',
-                            "Det.ocr_version": f"PP-OCR{get_value('ocr_version', 'v5')}",
-                            # 没有v5
-                            "Cls.ocr_version": "PP-OCRv4",
-                            "Rec.ocr_version": f"PP-OCR{get_value('ocr_version', 'v5')}",
-                            "EngineConfig.onnxruntime.use_cuda": use_gpu("onnxruntime"),
-                        },
-                    },
-                    "server": {"name": "RapidOCRModel", "kwargs": {}},
-                },
+                # or "ocr_server"
+                "model": "ocr_mobile",
             },
-            # 本地加载的模型
             "layout": {
                 "name": "layout",
                 "max_workers": 2,
@@ -293,82 +264,21 @@ settings: dict[str, Any] = {
                     "policy": "fifo",
                     "max_task_size": 10,
                 },
-                # 或者这样，直接指定
-                # "model":{},
-                # 表示使用哪个设置，目的是允许在配置文件中指定多个，然后可以快速切换
-                "model": "v2",
-                "settings": {
-                    "v2": {
-                        "name": "RapidLayoutModel",
-                        "kwargs": {
-                            "mapping": dict(_paddle_layout_v2),
-                            "model_type": "pp_doc_layoutv2",
-                            # cpu下，openvino快一些
-                            "engine_type": "onnxruntime"
-                            if use_gpu("onnxruntime")
-                            else get_cpu_engine(),
-                            "model_dir_or_path": get_model_path(
-                                "./models/layout/pp_doc_layoutv2.onnx"
-                            ),
-                            "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
-                            "conf_thresh": 0.3,
-                            "iou_thresh": 0.5,
-                        },
-                    },
-                    "v3": {
-                        "name": "RapidLayoutModel",
-                        "kwargs": {
-                            "mapping": dict(_paddle_layout_v3),
-                            "model_type": "pp_doc_layoutv3",
-                            # or "openvino"
-                            "engine_type": "onnxruntime"
-                            if use_gpu("onnxruntime")
-                            else get_cpu_engine(),
-                            "model_dir_or_path": get_model_path(
-                                "./models/layout/pp_doc_layoutv3.onnx"
-                            ),
-                            "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
-                            "conf_thresh": 0.3,
-                            "iou_thresh": 0.5,
-                        },
-                    },
-                },
+                # or layout_v3
+                "model": "layout_v2",
             },
-            # 如果同时也需要启动一个v3，也是可以的
-            "layout-v3": {
-                "name": "layout",
+            "formula": {
+                "name": "formula",
                 "max_workers": 2,
+                # 如果使用的是llm，没有必要启动进程，但是也不影响
                 "use_process": True,
                 "scheduler": {
                     "policy": "fifo",
                     "max_task_size": 10,
                 },
-                # 或者这样，直接指定
-                # "model":{},
-                # 表示使用哪个设置，目的是允许在配置文件中指定多个，然后可以快速切换
-                "model": "v3",
-                "settings": {
-                    "v3": {
-                        "name": "RapidLayoutModel",
-                        "kwargs": {
-                            "mapping": dict(_paddle_layout_v3),
-                            "model_type": "pp_doc_layoutv3",
-                            # or "openvino"
-                            "engine_type": "onnxruntime"
-                            if use_gpu("onnxruntime")
-                            else get_cpu_engine(),
-                            "model_dir_or_path": get_model_path(
-                                "./models/layout/pp_doc_layoutv3.onnx"
-                            ),
-                            "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
-                            "conf_thresh": 0.5,
-                            "iou_thresh": 0.5,
-                        },
-                    }
-                },
+                # paddle or glm or rapid_formula
+                "model": "formula",
             },
-            # 如果没有定义特定的小模型，就使用llm
-            "formula": "llm",
             "table_cls": {
                 # 表格分类，有边框还是无边框
                 "name": "",
@@ -381,126 +291,207 @@ settings: dict[str, Any] = {
                     # 因为这里使用单个模型，这个和后台llm的能力匹配即可
                     "max_task_size": 10,
                 },
-                "model": "yolox",
-                "settings": {
-                    "q": {
-                        "name": "TableClsModel",
-                        "kwargs": {
-                            "model_type": "q",
-                            "model_path": get_model_path(
-                                "./models/table_cls/q_cls.onnx"
-                            ),
-                            # "use_gpu": use_gpu("onnxruntime"),
-                        },
-                    },
-                    "paddle": {
-                        "name": "TableClsModel",
-                        "kwargs": {
-                            "model_type": "paddle",
-                            "model_path": get_model_path(
-                                "./models/table_cls/paddle_cls.onnx"
-                            ),
-                            # "use_gpu": use_gpu("onnxruntime"),
-                        },
-                    },
-                    "yolo": {
-                        "name": "TableClsModel",
-                        "kwargs": {
-                            "model_type": "yolo",
-                            "model_path": get_model_path(
-                                "./models/table_cls/yolo_cls.onnx"
-                            ),
-                            # "use_gpu": use_gpu("onnxruntime"),
-                        },
-                    },
-                    "yolox": {
-                        "name": "TableClsModel",
-                        "kwargs": {
-                            "model_type": "yolox",
-                            "model_path": get_model_path(
-                                "./models/table_cls/yolo_cls_x.onnx"
-                            ),
-                            # "use_gpu": use_gpu("onnxruntime"),
-                        },
-                    },
-                },
+                "model": "table_cls_q",
             },
             "table_det": {
                 # 识别表格的单元格
                 "name": "",
                 "enable": True,
                 # 表示只需要一个即可，不需要通过每一个进程一个或者每个线程一个
-                "max_workers": 0,
-                "use_process": False,
+                "max_workers": 2,
+                "use_process": True,
                 "scheduler": {
                     "policy": "fifo",
                     # 因为这里使用单个模型，这个和后台llm的能力匹配即可
                     "max_task_size": 10,
                 },
-                "model": "x",
-                "settings": {"x": {"name": "TestModel"}},
+                "model": "table_det",
             },
-            "table_llm": "llm",
-            # 可以支持3个任务：text，table，formula
-            "llm": {
+            "table_llm": {
+                # 识别表格的单元格
                 "name": "",
                 "enable": True,
                 # 表示只需要一个即可，不需要通过每一个进程一个或者每个线程一个
-                "max_workers": 0,
-                "use_process": False,
+                "max_workers": 2,
+                "use_process": True,
                 "scheduler": {
                     "policy": "fifo",
                     # 因为这里使用单个模型，这个和后台llm的能力匹配即可
                     "max_task_size": 10,
                 },
+                # paddle or glm
                 "model": "paddle",
-                "settings": {
-                    # 大模型
-                    "paddle": {
-                        "name": "LLMModel",
-                        "kwargs": {
-                            "model": "paddleocr-vl",
-                            "client": {
-                                "base_url": "http://127.0.0.1:4001/v1",
-                                "api_key": "",
-                            },
-                            "params": {
-                                # <=后台llmserver的max-token-len - input_tokens
-                                "max_tokens": 4000,
-                                "temperature": 0,
-                            },
-                            "prompt": "Formula Recognition:",
-                            "prompts": {
-                                "text": "OCR:",
-                                "formula": "Formula Recognition:",
-                                "table": "Table Recognition:",
-                                # "chart":"Chart Recognition:"
-                            },
-                        },
+            },
+        },
+        "models": {
+            # 这里的设置对应RapidOCR，然后必须使用具体的枚举类型，但是使用了这些，每次就必须载入RapidOCR这个库
+            # 这个又直接载入cv2/numpy，导致在多进程下，有些不需要的，载入就变慢，所以这里还是使用字符串
+            # 在这个模型中做转换处理
+            "ocr_mobile": {
+                "name": "RapidOCRModel",
+                "kwargs": {
+                    "Global.model_root_dir": get_model_path("./models/ocr"),
+                    "Global.text_score": 0.5,
+                    # -1表示无论如何都det，否则w/h>width_height_ratio，就不det了，而是直接rec
+                    "Global.width_height_ratio": -1,
+                    "Det.engine_type": get_ocr_engine(),
+                    "Cls.engine_type": get_ocr_engine(),
+                    "Rec.engine_type": get_ocr_engine(),
+                    "Det.model_type": "mobile",
+                    "Cls.model_type": "mobile",
+                    "Rec.model_type": "mobile",
+                    # 表示下载目录
+                    #'Det.model_dir':'./models/ocr',
+                    # 表示模型文件
+                    #'Det.model_path':'',
+                    #'Cls.model_path':'',
+                    #'Rec.model_path':'',
+                    "Det.ocr_version": f"PP-OCR{get_value('ocr_version', 'v5')}",
+                    # 没有v5
+                    "Cls.ocr_version": "PP-OCRv4",
+                    "Rec.ocr_version": f"PP-OCR{get_value('ocr_version', 'v5')}",
+                    "EngineConfig.onnxruntime.use_cuda": use_gpu("onnxruntime"),
+                },
+            },
+            "ocr_server": {
+                "name": "RapidOCRModel",
+                "kwargs": {
+                    "Global.model_root_dir": get_model_path("./models/ocr"),
+                    "Global.text_score": 0.5,
+                    # -1表示无论如何都det，否则w/h>width_height_ratio，就不det了，而是直接rec
+                    "Global.width_height_ratio": -1,
+                    "Det.engine_type": get_ocr_engine(),
+                    "Cls.engine_type": get_ocr_engine(),
+                    "Rec.engine_type": get_ocr_engine(),
+                    "Det.model_type": "server",
+                    "Cls.model_type": "server",
+                    "Rec.model_type": "server",
+                    # 表示下载目录
+                    #'Det.model_dir':'./models/ocr',
+                    # 表示模型文件
+                    #'Det.model_path':'',
+                    #'Cls.model_path':'',
+                    #'Rec.model_path':'',
+                    "Det.ocr_version": f"PP-OCR{get_value('ocr_version', 'v5')}",
+                    # 没有v5
+                    "Cls.ocr_version": "PP-OCRv4",
+                    "Rec.ocr_version": f"PP-OCR{get_value('ocr_version', 'v5')}",
+                    "EngineConfig.onnxruntime.use_cuda": use_gpu("onnxruntime"),
+                },
+            },
+            "layout_v2": {
+                "name": "RapidLayoutModel",
+                "kwargs": {
+                    "mapping": dict(_paddle_layout_v2),
+                    "model_type": "pp_doc_layoutv2",
+                    # cpu下，openvino快一些
+                    "engine_type": "onnxruntime"
+                    if use_gpu("onnxruntime")
+                    else get_cpu_engine(),
+                    "model_dir_or_path": get_model_path(
+                        "./models/layout/pp_doc_layoutv2.onnx"
+                    ),
+                    "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
+                    "conf_thresh": 0.3,
+                    "iou_thresh": 0.5,
+                },
+            },
+            "layout_v3": {
+                "name": "RapidLayoutModel",
+                "kwargs": {
+                    "mapping": dict(_paddle_layout_v3),
+                    "model_type": "pp_doc_layoutv3",
+                    # or "openvino"
+                    "engine_type": "onnxruntime"
+                    if use_gpu("onnxruntime")
+                    else get_cpu_engine(),
+                    "model_dir_or_path": get_model_path(
+                        "./models/layout/pp_doc_layoutv3.onnx"
+                    ),
+                    "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
+                    "conf_thresh": 0.3,
+                    "iou_thresh": 0.5,
+                },
+            },
+            "paddle": {
+                "name": "LLMModel",
+                "kwargs": {
+                    "model": "paddleocr-vl",
+                    "client": {
+                        "base_url": "http://127.0.0.1:4001/v1",
+                        "api_key": "",
                     },
-                    "glm": {
-                        "name": "LLMModel",
-                        "kwargs": {
-                            "model": "glmocr",
-                            "client": {
-                                "base_url": "http://127.0.0.1:4002/v1",
-                                "api_key": "",
-                            },
-                            "params": {
-                                # <=后台llmserver的max-token-len - input_tokens
-                                "max_tokens": 4000,
-                                "temperature": 0,
-                            },
-                            "prompt": "Formula Recognition:",
-                            "prompts": {
-                                "text": "Text Recognition:",
-                                "formula": "Formula Recognition:",
-                                "table": "Table Recognition:",
-                            },
-                        },
+                    "params": {
+                        # <=后台llmserver的max-token-len - input_tokens
+                        "max_tokens": 4000,
+                        "temperature": 0,
+                    },
+                    #"prompt": "Formula Recognition:",
+                    "prompts": {
+                        "text": "OCR:",
+                        "formula": "Formula Recognition:",
+                        "table": "Table Recognition:",
+                        # "chart":"Chart Recognition:"
                     },
                 },
             },
+            "glm": {
+                "name": "LLMModel",
+                "kwargs": {
+                    "model": "glmocr",
+                    "client": {
+                        "base_url": "http://127.0.0.1:4002/v1",
+                        "api_key": "",
+                    },
+                    "params": {
+                        # <=后台llmserver的max-token-len - input_tokens
+                        "max_tokens": 4000,
+                        "temperature": 0,
+                    },
+                    "prompt": "Formula Recognition:",
+                    "prompts": {
+                        "text": "Text Recognition:",
+                        "formula": "Formula Recognition:",
+                        "table": "Table Recognition:",
+                    },
+                },
+            },
+            "table_cls_q": {
+                "name": "TableClsModel",
+                "kwargs": {
+                    "model_type": "q",
+                    "model_path": get_model_path("./models/table_cls/q_cls.onnx"),
+                    # "use_gpu": use_gpu("onnxruntime"),
+                },
+            },
+            "table_cls_paddle": {
+                "name": "TableClsModel",
+                "kwargs": {
+                    "model_type": "paddle",
+                    "model_path": get_model_path("./models/table_cls/paddle_cls.onnx"),
+                    # "use_gpu": use_gpu("onnxruntime"),
+                },
+            },
+            "table_cls_yolo": {
+                "name": "TableClsModel",
+                "kwargs": {
+                    "model_type": "yolo",
+                    "model_path": get_model_path("./models/table_cls/yolo_cls.onnx"),
+                    # "use_gpu": use_gpu("onnxruntime"),
+                },
+            },
+            "table_cls_yolox": {
+                "name": "TableClsModel",
+                "kwargs": {
+                    "model_type": "yolox",
+                    "model_path": get_model_path("./models/table_cls/yolo_cls_x.onnx"),
+                    # "use_gpu": use_gpu("onnxruntime"),
+                },
+            },
+            "table_det": {
+                "name": "TestModel"
+            },
+            "formula": {"name": "RapidFormulaModel", "kwargs": {}},
         },
     },
     "pdf_parser": {
@@ -608,5 +599,4 @@ settings: dict[str, Any] = {
         # 如果设置为False，scheduler.max_task_size=系统能力，当只有一个任务，可以并发，最快速完成
         "use_process": False,
     },
-    
 }

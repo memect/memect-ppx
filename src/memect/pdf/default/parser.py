@@ -544,8 +544,15 @@ class DefaultParser:
             for page in doc.working_pages:
                 for obj in page.objects:
                     if isinstance(obj, KFormula):
-                        text = obj.cache.pop(self._formula_key)["text"]
-                        obj.latex = KFormula.normalize(text)
+                        #来自其他模型，返回的是:{"latex":""}
+                        result = obj.cache.pop(self._formula_key)
+                        if 'latex' in result:
+                            text = result['latex']
+                        else:
+                            #来自llm的返回的是{"text":""}
+                            text = result['text']
+                            text=KFormula.normalize(text)
+                        obj.latex=text
 
         # 先获得公式对象+截图
         self._do(parse_page, doc.working_pages, max_workers)

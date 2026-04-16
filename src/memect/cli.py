@@ -170,14 +170,12 @@ def parse(
         params.doc_json=doc_json
     
 
-    if file.is_file():
-        #a.pdf => a.pdf.out 如果没有out_dir
-        doc = KDocument(file,params=params,out_dir=out_dir)
-        with Parser(get_settings('pdf_parser')) as parser:
-            parser.parse(doc)
-    elif file.is_dir():
-        #表示为多个文件，需要并行吗？可能需要比较多的内存
-        def get_docs(dir_:Path):
+
+    #表示为多个文件，需要并行吗？可能需要比较多的内存
+    def get_docs(dir_:Path):
+        if dir_.is_file():
+            yield KDocumentFactory(dir_,params,out_dir)
+        else:
             for file in dir_.iterdir():
                 if file.is_file() and file.name[0]!='.' and file.suffix.lower() in ('.pdf','.png','.jpg','.jpeg','.webp','.bmp'):
                     file_out_dir=None
@@ -187,13 +185,13 @@ def parse(
                     yield KDocumentFactory(file,params,file_out_dir)
                 else:
                     pass
-        #考虑到文件数不会太多，为了获得总数，使用list
-        try:
-            Parser.batch(get_settings('pdf_parser'),list(get_docs(file)),max_workers=max_workers)
-        finally:
+    #考虑到文件数不会太多，为了获得总数，使用list
+    try:
+        Parser.batch(get_settings('pdf_parser'),list(get_docs(file)),max_workers=max_workers)
+    finally:
+        if max_workers>0:
             kill_child_processes(os.getpid(),timeout=5)
-    else:
-        pass
+
 
 
 
