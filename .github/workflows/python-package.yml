@@ -89,6 +89,5 @@ jobs:
 
       - name: Publish to PyPI
         run: |
-          pip install -U twine
-          twine check dist/*
-          twine upload dist/* -u __token__ -p ${{ secrets.PYPI_TOKEN }}
+          pip install -U uv
+          uv publish dist/* --token ${{ secrets.PYPI_TOKEN }}
