@@ -196,18 +196,8 @@ class Parser:
         
 
     @classmethod
-    def _mp_init(cls,args:Any,stopped:Any):
+    def _mp_init(cls,args:Any):
         assert cls._mp_instance is None
-        def on_stop():
-            while True:
-                if stopped.value:
-                    ModelExecutor.shutdown()
-                    break
-                else:
-                    time.sleep(0.5)
-        
-        Thread(target=on_stop,daemon=True).start()
-
         def on_signal(n:int,frame:FrameType|None):
             cls._mp_instance=None
             sys.exit(0)
@@ -245,9 +235,9 @@ class Parser:
             timer.mark('endparse')
         else:
             mp_context = mp.get_context('spawn')
-            mp_stopped = mp_context.Value('b',False)
+            #mp_stopped = mp_context.Value('b',False)
             mp_init = MPInit()
-            mp_init.set_fn(cls._mp_init,args,mp_stopped)
+            mp_init.set_fn(cls._mp_init,args)
 
             def kill_mp_processes(kill:bool,timeout:float|None=10):
                 #每次返回一个新的
@@ -283,8 +273,7 @@ class Parser:
                         n+=1
                         cls._logger.info('第[%s/%s]个解析成功',n,total)
                     timer.mark('endparse')
-                    mp_stopped.value=True
-                    time.sleep(1)
+                    #mp_stopped.value=True
                     executor.shutdown(False)
             finally:
                 #可能子进程还无法退出

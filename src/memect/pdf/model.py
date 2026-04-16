@@ -188,7 +188,7 @@ class ModelExecutor:
             args.name, self.execute, **args.scheduler.model_dump()
         )
 
-        weakref.finalize(self,self._close,self._executor,self._scheduler)
+        self._finalizer=weakref.finalize(self,self._close,self._executor,self._scheduler)
     
     @classmethod
     def _close(cls,executor:Executor|None,scheduler:Scheduler[Any,Any]|None):
@@ -198,7 +198,8 @@ class ModelExecutor:
             scheduler.close()
     
     def close(self):
-        self._close(self._executor,self._scheduler)
+        if self._finalizer.alive:
+            self._finalizer()
         self._executor=None
         self._scheduler=None
         self._model=None
