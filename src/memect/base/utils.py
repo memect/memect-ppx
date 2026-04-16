@@ -259,6 +259,11 @@ def safe_write(file: str | Path, data:Any, *, encoding: str = "utf-8"):
         temp_file.unlink(True)
 
 
+def _is_resource_tracker(p:psutil.Process):
+    for arg in p.cmdline():
+        if 'from multiprocessing.resource_tracker import main' in arg:
+            return True
+    return False
 
 def kill_process(process:int|psutil.Process,timeout:float=30,kill_self:bool=True):
     """杀死指定的进程"""
@@ -266,6 +271,8 @@ def kill_process(process:int|psutil.Process,timeout:float=30,kill_self:bool=True
     try:
         if isinstance(process,int):
             process = psutil.Process(process)
+        if _is_resource_tracker(process):
+            return
         children = process.children(recursive=True)
         #print(f'start terminate process={process.pid},name={process.name()},children={[p.pid for p in children]},cmdline={process.cmdline()}')
         logger.info('start kill children,process=%s,children=%s',process.pid,[p.pid for p in children])
@@ -302,6 +309,8 @@ def kill_processes(processes:list[psutil.Process],timeout:float=30):
     for p in processes:
         # or p.terminate()
         try:
+            if _is_resource_tracker(p):
+                continue
             #print(f'start terminate process={p.pid},name={p.name()},cmdline={p.cmdline()}')
             logger.info('start terminate process=%s',p.pid)
             if sys.platform=='win32':
