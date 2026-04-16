@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-memect-ppx 是一个 PDF / 图片文档解析工具，将输入文件转换为结构化的 Markdown、JSON、DOCX、PPTX 或 HTML。支持本地模型（默认）和多种 LLM 后端（DeepSeek、PaddleOCR、GLM），适用于高精度文档理解场景。
+memect-ppx 是一个 PDF / 图片文档解析工具，将输入文件转换为结构化的 Markdown和JSON。支持本地模型（默认）和多种 LLM 后端（DeepSeek、PaddleOCR、GLM），适用于高精度文档理解场景。
 
 - Python >= 3.12
 - 包名：`memect-ppx`
@@ -34,7 +34,7 @@ TableCls / LLMTable
          KDocument / KPage / KObject
                   │
                   ▼
-        输出：md / json / docx / pptx / html / zip
+        输出：md / json
 ```
 
 ---
@@ -219,7 +219,3 @@ docker compose up -d
 |------|------|
 | `.md` | Markdown，保留标题层级、表格、公式（LaTeX） |
 | `.json` | 结构化 JSON，包含完整 `KDocument` 对象树 |
-| `.docx` | Word 文档 |
-| `.pptx` | PowerPoint，适用于 `--mode ppt` |
-| `.html` | HTML，含样式 |
-| `out.zip` | 以上所有输出的打包文件 |

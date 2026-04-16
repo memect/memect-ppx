@@ -114,9 +114,3 @@ override-dependencies = [
     "onnxruntime-gpu;sys_platform == 'never'",
 ]
 conflicts = [[{ extra = "cuda" }, { extra = "cann" }]]
-
-[[tool.uv.index]]
-default = false
-name = "memect"
-url = "http://INTERNAL_PYPI_SIMPLE"
-publish-url =  "http://INTERNAL_PYPI"
