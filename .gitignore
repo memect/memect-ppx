@@ -17,6 +17,7 @@
 !/.dockerignore
 !/install
 !/.gitattributes
+!/.github/
 
 
 **/.DS_Store
