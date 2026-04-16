@@ -1,5 +1,7 @@
+import atexit
 import logging
 import multiprocessing as mp
+import signal
 import threading
 import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
@@ -117,7 +119,7 @@ class ModelRunner(Runner):
         return self._model.execute(self._files)
 
 
-class ModelConfig(BaseModel):
+class ModelArgs(BaseModel):
     name: str
     args: Sequence[Any] = Field(default_factory=tuple)
     kwargs: Mapping[str, Any] = Field(default_factory=dict)
@@ -135,17 +137,12 @@ class ModelExecutorArgs(MyBaseModel):
     max_idle_timeout: float | None = None
     """表示进程或者线程空闲了多长时间就释放，None表示不会释放"""
     scheduler: SchedulerArgs = Field(default_factory=SchedulerArgs)
-    model: ModelConfig | str
+    model: ModelArgs | str
     """如果为字符串，表示使用settings中的设置"""
-    settings: Mapping[str, ModelConfig] = Field(default_factory=dict)
+    #settings: Mapping[str, ModelArgs] = Field(default_factory=dict)
     use_api: bool = False
     port: int = 9527
 
-    def get_model(self) -> ModelConfig:
-        if isinstance(self.model, str):
-            return self.settings[self.model]
-        else:
-            return self.model
 
 
 # [xx,cache,filename]
@@ -162,11 +159,12 @@ class ModelExecutor:
     def __init__(self, args: ModelExecutorArgs | Mapping[str, Any]):
         super().__init__()
         args = ModelExecutorArgs.create(args)
+        assert not isinstance(args.model,str)
         # self._args:Final = args
         self._use_api: Final = args.use_api
         self._chunk_size: Final = args.chunk_size
         self._use_process: Final = args.use_process
-        self._model_cfg: Final = args.get_model()
+        self._model_cfg: Final = args.model
         # 如果是本地执行，建议：scheduler.max_task_size>=args.max_workers
         self._max_workers: Final = args.max_workers
         self._model: Model | None = None
@@ -344,7 +342,7 @@ class ModelExecutor:
     _mp_model: ClassVar[Model | None] = None
 
     @classmethod
-    def _init_process(cls, cfg: ModelConfig):
+    def _init_process(cls, cfg: ModelArgs):
         assert cls._mp_model is None
         cls._mp_model = cls._create_model(cfg)
 
@@ -354,7 +352,7 @@ class ModelExecutor:
         return cls._mp_model.execute(files)
 
     @classmethod
-    def _create_model(cls, cfg: ModelConfig) -> Model:
+    def _create_model(cls, cfg: ModelArgs) -> Model:
         return Model.create(cfg.name, *cfg.args, **cfg.kwargs)
 
     _manager: ClassVar["ModelManager|None"] = None
@@ -362,11 +360,13 @@ class ModelExecutor:
 
     @classmethod
     def setup(cls, args: "ModelManagerArgs|Mapping[str,Any]|None" = None):
+        
         with cls._manager_lock:
             if cls._manager is None:
                 if not args:
                     args = get_settings("model_manager")
                 cls._manager = ModelManager(args)
+                atexit.register(cls.shutdown)
 
     @classmethod
     def get(cls, name: str) -> "ModelExecutor":
@@ -386,7 +386,8 @@ class ModelExecutor:
 
 
 class ModelManagerArgs(MyBaseModel):
-    models: dict[str, ModelExecutorArgs | str] = Field(default_factory=dict)
+    executors: dict[str, ModelExecutorArgs] = Field(default_factory=dict)
+    models: dict[str,ModelArgs] = Field(default_factory=dict)
 
 
 class ModelManager:
@@ -396,30 +397,26 @@ class ModelManager:
         super().__init__()
         args = ModelManagerArgs.create(args)
         self._executors: dict[str, ModelExecutor] = {}
+        self._models:dict[str,ModelArgs]={}
 
-        alias_mapping: dict[str, str] = {}
-        models: dict[str, ModelExecutorArgs] = {}
+        #alias_mapping: dict[str, str] = {}
+        models: dict[str, ModelArgs] = {}
         for name, value in args.models.items():
-            if isinstance(value, str):
-                alias_mapping[name] = value
-            else:
-                models[name] = value
+            models[name] = value
 
-        for name, executor_args in models.items():
+        for name, executor_args in args.executors.items():
             if executor_args.enable:
-                self._logger.info("create model name=%s", name)
+                
                 executor_args.name = name
+                if isinstance(executor_args.model,str):
+                    self._logger.info("create model executor name=%s,model=%s", name,executor_args.model)
+                    executor_args.model = models[executor_args.model]
+                else:
+                    self._logger.info("create model executor name=%s", name)
+
                 self._executors[name] = ModelExecutor(executor_args)
             else:
-                self._logger.info("disable model name=%s", name)
-
-        for alias, name in alias_mapping.items():
-            if name in self._executors:
-                self._logger.info("alias model from=%s,to=%s", alias, name)
-                self._executors[alias] = self._executors[name]
-            else:
-                # 没有定义，或者没有启用
-                pass
+                self._logger.info("disable model executor name=%s", name)
 
     def get_executor(self, name: str) -> ModelExecutor:
         return self._executors[name]
@@ -730,6 +727,29 @@ class RapidOCRModel(Model):
         # 代码可以参考
         #
         pass
+
+
+class RapidFormulaModel(Model):
+    def __init__(self, **kwargs: Any):
+        super().__init__()
+        #这个把pix2tex转化为onnx了
+        #需要从github上下载文件，会比较慢
+        #https://github.com/RapidAI/RapidLaTeXOCR/releases
+        from rapid_latex_ocr import LatexOCR
+
+        #kwargs = self._normalize_kwargs(kwargs)
+        self._model: Final = LatexOCR(**kwargs)
+
+    @override
+    def _execute(self, files: Sequence[FileInfo]):
+        results:list[Any]=[]
+        for file in files:
+            res,elapsed = self._model(file.cv2_image)
+            results.append({
+                'latex':res,
+                'elapsed':elapsed
+            })
+        return results
 
 
 class TableClsModel(Model):
