@@ -181,15 +181,10 @@ class Paddle:
 
         #根据两步的结果进行处理
         buf: list[str] = []
-        for page in doc.pages:
-            if page.skipped:
-                continue
-
+        for page in doc.working_pages:
             text = self._parse_page(page)
             buf.append(text)
         
-
-
     def _parse_layout(self,doc:KDocument):
         debugger = self._debugger.bind()
         name=self._layout_key
@@ -255,7 +250,6 @@ class Paddle:
                 with debugger.group('llm'):
                     debugger.print(i,vobj.type)
                     print(raw_text)
-                debugger.console.print()
 
             text = self._clean_text(vobj,raw_text)
             #使用paddle自身的类型

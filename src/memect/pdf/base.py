@@ -35,6 +35,7 @@ from memect.base.api import ApiError
 from memect.base.bbox import BBox, Quad
 from memect.base.matrix import Matrix
 from memect.base.utils import AutoCleaner, MyBaseModel, safe_write
+from memect.pdf.grid import Grid
 
 
 class PageParams(MyBaseModel):
@@ -697,8 +698,8 @@ class KPage:
         """页面上所有的原始pdf矩形"""
         self.pdf_figures: Final[list[KPDFFigure]] = []
         """页面上所有的原始的pdf图片"""
-        self.pdf_paths: Final[list[Any]] = []
-        """页面上所有的原始的路径"""
+        #self.pdf_paths: Final[list[Any]] = []
+        #"""页面上所有的原始的路径"""
 
         # self.ocr_spans:Final[list[KSpan]]=[]
         # """ocr识别的字符串，目的是用来去掉和pdf识别的且重叠的"""
@@ -1159,11 +1160,7 @@ class KPage:
     def markdown(self) -> str:
         buf: list[str] = []
         for obj in self.objects:
-            if isinstance(obj, KTable):
-                # 后续也可以使用obj.markdown()
-                buf.append(obj.html())
-            else:
-                buf.append(obj.markdown())
+            buf.append(obj.markdown())
         return "\n\n".join(buf)
 
 
@@ -2012,7 +2009,7 @@ class KTable(KObject):
         return data
 
     def markdown(self) -> str:
-        return super().markdown()
+        return self.html()
 
     def html(self) -> str:
         # 没有使用这个就是返回最基本的table的结构，不需要style
@@ -2152,6 +2149,29 @@ class KTable(KObject):
     def from_data(cls, page: KPage, quad: Quad, data: Mapping[str, Any]) -> "KTable":
         table = KTable(page, quad)
         table.fill(data)
+        return table
+    
+    @classmethod
+    def from_grid(cls,page:KPage,grid:Grid):
+        table = KTable(page,grid.bbox.to_quad())
+        table.row_num = grid.row_num
+        table.col_num = grid.col_num
+        for cell in grid.cells:
+            #TODO 将来支持表中表？
+            #可能包含图片，字符（需要转换为Textbox）
+            #TODO 这里需要获得text
+            #如果有图片，需要先分开
+            buf:list[str]=[]
+            for obj in cell.objects:
+                if isinstance(obj,KChar):
+                    buf.append(obj.text)
+                else:
+                    pass
+            text=''.join(buf)
+            kcell = KCell(page,cell.bbox.to_quad(),text=text,row_index=cell.row_index,col_index=cell.col_index,row_span=cell.row_span,col_span=cell.col_span)
+            kcell.objects.extend(cell.objects)
+
+            table.cells.append(kcell)
         return table
 
     @classmethod
@@ -2394,6 +2414,17 @@ class KLine(KObject):
             return self.bbox.expand(dy=self.width)
         else:
             return self.bbox.expand(dx=self.width)
+    
+    @classmethod
+    def split(cls,lines:Sequence[Self])->tuple[list[Self],list[Self]]:
+        h_lines:list[Self]=[]
+        v_lines:list[Self]=[]
+        for line in lines:
+            if line.is_h():
+                h_lines.append(line)
+            else:
+                v_lines.append(line)
+        return h_lines,v_lines
 
 
 class KRect(KObject):

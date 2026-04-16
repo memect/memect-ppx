@@ -2,7 +2,7 @@ from typing import Any, Iterable
 
 from memect.base import lists
 from memect.base.bbox import BBox
-from .base import Group
+
 
 
 class Sorter:
@@ -40,7 +40,7 @@ class Sorter:
         return lines
     
     def _parse_line(self,objects:list[Any])->list[Any]:
-
+        from .base import Group
         def has_above_object(line:Group[Any],obj:Any)->bool:
             b1 = BBox.from_object(obj)
             for obj2 in line:

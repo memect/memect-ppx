@@ -116,6 +116,7 @@ def parse(
     """解析 PDF 文件"""
     from .base.config import setup
     from .base.debug import XDebugger
+    from .base.utils import kill_child_processes
     from .pdf.base import KDocument,KDocumentFactory,ParseParams
     from .pdf.parser import Parser
 
@@ -168,10 +169,12 @@ def parse(
     if doc_json is not None:
         params.doc_json=doc_json
     
+
     if file.is_file():
         #a.pdf => a.pdf.out 如果没有out_dir
         doc = KDocument(file,params=params,out_dir=out_dir)
-        Parser(get_settings('pdf_parser')).parse(doc)
+        with Parser(get_settings('pdf_parser')) as parser:
+            parser.parse(doc)
     elif file.is_dir():
         #表示为多个文件，需要并行吗？可能需要比较多的内存
         def get_docs(dir_:Path):
@@ -185,7 +188,10 @@ def parse(
                 else:
                     pass
         #考虑到文件数不会太多，为了获得总数，使用list
-        Parser.batch(get_settings('pdf_parser'),list(get_docs(file)),max_workers=max_workers)
+        try:
+            Parser.batch(get_settings('pdf_parser'),list(get_docs(file)),max_workers=max_workers)
+        finally:
+            kill_child_processes(os.getpid(),timeout=5)
     else:
         pass
 
@@ -221,8 +227,8 @@ def test(
     max_workers:Annotated[int,typer.Option(help='同时执行多少个')]=5
 ):
     """测试api"""
-    from memect.x2x.config import setup
-    from memect.x2x.test import Tester
+    from memect.base.config import setup
+    from memect.base.test import Tester
     setup()
     tester = Tester(url=url,max_workers=max_workers)
     tester.run(dir)

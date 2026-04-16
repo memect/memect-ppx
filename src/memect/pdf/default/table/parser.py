@@ -83,6 +83,9 @@ class TableParser:
 
     def _parse_auto(self, doc: KDocument, *, max_workers: int = 0):
         """先判断是无边框表格还是有边框表格"""
-        from .auto import Parser
+        #from .auto import Parser
+
+        #赶着提交，就先使用有边框的解析
+        from .ybk import Parser 
         Parser().parse(doc,max_workers=max_workers)
 

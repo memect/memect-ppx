@@ -3,13 +3,14 @@ from abc import ABC, abstractmethod
 from dataclasses import KW_ONLY, dataclass
 from logging import Logger
 from pathlib import Path
-from typing import Any, BinaryIO, Protocol, Self, Sequence, TextIO, overload, override
+from typing import Any, BinaryIO, Final, Protocol, Self, Sequence, TextIO, overload, override
 
 
 from PIL import Image, ImageDraw
 
 from memect.base.bbox import BBox
 from memect.base.debug import XDebugger
+
 from .sort import Sorter
 
 # 声明为Sequence可以支持tuple/list，但是声明为tuple[T,T,T,T]会更加严格，限制为4个
@@ -62,6 +63,7 @@ class BaseGrid(ABC):
         self.lines = lines
         self.col_num: int = 0
         self.row_num: int = 0
+        self.bbox = BBox.join(lines)
         self.cells: list[Cell] = []
         self._parse(lines)
 
@@ -459,7 +461,7 @@ class Grid(BaseGrid):
             # 从左到右
             v_lines.sort(key=lambda line: line[0])
 
-        bbox: list[float] = [
+        bbox: Final[list[float]] = [
             min([line[0] for line in lines]),
             min([line[1] for line in lines]),
             max([line[2] for line in lines]),

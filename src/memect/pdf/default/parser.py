@@ -146,21 +146,11 @@ class DefaultParser:
         self._pdf_parser.parse(doc)
         for page in doc.working_pages:
             if debugger.allow("draw", page=page.number):
-                # TODO 这里需要转换一下pdf_paths的坐标
-                img = page.image.copy()
-                draw = PIL.ImageDraw.Draw(img)
-                m = Matrix().scale(img.width / page.width, img.height / page.height)
-                for path in page.pdf_paths:
-                    x0, y0, x1, y1 = BBox.from_list(path["bbox"], matrix=m)
-                    # color = path['color']
-                    if path["stroked"]:
-                        draw.line((x0, y0, x1, y1), fill=(0, 0, 255), width=2)
-                    else:
-                        draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 0))
                 page.draw(
                     ("vobjects", page.vobjects),
                     ("chars", page.pdf_chars),
-                    (f"paths={len(page.pdf_paths)}", img),
+                    (f"lines={len(page.pdf_lines)}",page.pdf_lines),
+                    (f"rects={len(page.pdf_rects)}",page.pdf_rects),
                     dir="debug/default/pdf",
                     show_type=False,
                 )
