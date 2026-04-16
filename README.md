@@ -11,28 +11,32 @@ $source .venv/bin/activate
 #$uv pip uninstall opencv-python opencv-contrib-python opencv-contrib-headless opencv-contrib-python-headless
 #$uv pip uninstall onnxruntime onnxruntime-gpu
 
-#or opencv-contrib-python-headless
-$uv pip install opencv-contrib-python --no-config
+
 
 #cpu版本
 $uv pip install memect-ppx
 $uv pip install onnxruntime --no-config
+#or opencv-contrib-python-headless
+$uv pip install opencv-contrib-python --no-config
 
 #gpu版本
 #安装依赖的cuda库，如果系统中已经全局安装，可以不安装，需要和onnxruntime-gpu的一致
 #如果是其他版本，请根据onnxruntime-gpu的要求安装几个
 $uv pip install memect-ppx[cuda]
-#这个必须安装
 $uv pip install onnxruntime-gpu --no-config
+#or opencv-contrib-python-headless
+$uv pip install opencv-contrib-python --no-config
 
 
 #安装方法二
 $git clone 
 $cd ppx
 $uv venv -p 3.12
+#如果操作系统比较老<=ubuntu 20.04
+#--no-install-package pdf-oxide
 $uv sync --no-install-project
 #如果需要使用gpu，如果系统中已经全局安装，可以不安装，或者安装另外的版本
-$uv sync --extra cuda
+$uv sync --extra cuda --no-install-project
 
 #这两个必须手动安装
 #or opencv-contrib-python-headless

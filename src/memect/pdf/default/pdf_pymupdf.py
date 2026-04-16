@@ -3,6 +3,8 @@ import math
 import re
 from typing import Any, Final, Literal, Sequence
 
+import PIL
+import PIL.ImageDraw
 import pymupdf
 
 from memect.base import images, lists, utils
@@ -305,7 +307,7 @@ class Parser:
         height = result["height"]
         matrix: Final = Matrix.lt_to_lb((width, height), kpage.size)
         kpage.pdf_chars.clear()
-        kpage.pdf_paths.clear()
+        #kpage.pdf_paths.clear()
         kpage.pdf_lines.clear()
         kpage.pdf_rects.clear()
         
@@ -497,37 +499,91 @@ class Parser:
         self._logger.warning('第%s页，图片=%s,没有文字遮挡的透明图片=%s',kpage.number,len(figures),len(no_chars_images))
         return False
 
-    def _parse_paths(self,page:KPage,paths:list[Any]):
+    def _parse_paths(self,page:KPage,paths:Sequence[Any]):
         debugger = self._debugger.bind(page=page.number)
-        total=len(paths)
-        line_paths:list[Any]=[]
-        rect_paths:list[Any]=[]
+        raw_paths:Final=paths
 
-        #需要考虑特殊的文档有几十万条线的情况，避免解析太慢
-        for vobj in page.vobjects:
-            if vobj.is_figure() or vobj.is_seal() or vobj.is_chart():
-                vobj.bbox.expand(dx=2,dy=2).get(paths,ratio=0.5,remove=True)
-            else:
-                #在文本框和表格区域的保留
-                pass
-        if debugger.allow('info'):
-            debugger.print('')
+        def filter1(paths:Sequence[Any])->list[Any]:
+            new_paths:list[Any]=[]
+            for path in paths:
+                # TODO 有些线使用无数个点组成，还需要吗？
+                # 现在不解析，原样保留，在处理表格的时候，需要再解析
+                # 如：有些地图或者其他，有十几万条线的
+                if path['isrect'] and path['alpha']>0:
+                    #re通过fill来填充矩形，如果是很小的矩形，就是线，而边框很少用来作为表格线
+                    #ml和ll等，通过stroke来画线
+                    #kpage.pdf_paths.append(block)
+                    #先处理了特殊的矩形合并？
+                    new_paths.append(path)
+                else:
+                    #曲线或者斜线，去掉
+                    pass
+            return new_paths
         
-        self._logger.debug('',extra={'page':page.number})
+        def filter2(paths:Sequence[Any]):
+            #需要考虑特殊的文档有几十万条线的情况，避免解析太慢
+            paths = list(paths)
+            for vobj in page.vobjects:
+                if vobj.is_any_text() or vobj.is_table():
+                    #在文本框和表格区域的保留，或者页面页脚区域的（这两个也不重要）
+                    #文本区域是考虑删除线或者下划线？
+                    pass
+                else:
+                    vobj.bbox.expand(dx=2,dy=2).get(paths,ratio=0.5,remove=True)
 
-        for path in paths:
-            # TODO 有些线使用无数个点组成，还需要吗？
-            # 现在不解析，原样保留，在处理表格的时候，需要再解析
-            # 如：有些地图或者其他，有十几万条线的
-            if path['isrect'] and path['alpha']>0:
-                #re通过fill来填充矩形，如果是很小的矩形，就是线，而边框很少用来作为表格线
-                #ml和ll等，通过stroke来画线
-                #kpage.pdf_paths.append(block)
-                #先处理了特殊的矩形合并？
-                paths.append(path)
-            else:
-                #曲线或者斜线，去掉
-                pass
+            return paths
+        
+        def split(paths:list[Any]):
+            line_paths:list[Any]=[]
+            rect_paths:list[Any]=[]
+            for path in paths:
+                bbox = path['bbox']
+                if bbox[2]-bbox[0]>=5 and bbox[3]-bbox[1]>=5:
+                    if not path['stroked']:
+                        rect_paths.append(path)
+                else:
+                    line_paths.append(path)
+            return line_paths,rect_paths
+
+        timer=utils.Timer.start()
+        timer.mark('start filter')
+        paths = filter1(paths)
+        paths = filter2(paths)
+        line_paths,rect_paths = split(paths)
+        timer.mark('end filter')
+        timer.mark('start merge')
+        h_lines,v_lines = LineParser().parse(page,line_paths)
+        page.pdf_lines.clear()
+        page.pdf_lines.extend(h_lines)
+        page.pdf_lines.extend(v_lines)
+
+        #矩形的合并，目的是为了能够还原背景，但是这些是否非常复杂的计算
+        page.pdf_rects.clear()
+        page.pdf_rects.extend([])
+        timer.mark('end merge')
+
+        if debugger.allow('info'):
+            debugger.print(f'第{page.number}页,耗时={timer.elapsed()}，原始路径={len(raw_paths)},line_paths={len(line_paths)},rect_paths={len(rect_paths)}，合并后=({len(h_lines)},{len(v_lines)})')
+        
+        if debugger.allow('draw'):
+            #TODO 为了渲染这些线，还需要转换一下
+            def draw_paths(paths:Sequence[Any]):
+                img = page.image.copy()
+                draw = PIL.ImageDraw.Draw(img)
+                m = Matrix().scale(img.width / page.width, img.height / page.height)
+                for path in paths:
+                    x0, y0, x1, y1 = BBox.from_list(path["bbox"], matrix=m)
+                    # color = path['color']
+                    if path["stroked"]:
+                        draw.line((x0, y0, x1, y1), fill=(0, 0, 255), width=2)
+                    else:
+                        draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 0))
+                return img
+            lines=h_lines+v_lines
+            page.draw(('page',None),('vobjects',page.vobjects),(f'raw paths={len(raw_paths)}',draw_paths(raw_paths)),(f'rect paths={len(rect_paths)}',draw_paths(rect_paths)),('rects',[]),(f'line paths={len(line_paths)}',draw_paths(line_paths)),(f'lines={len(h_lines)},{len(v_lines)}',lines),dir='debug/default/pymupdf')
+        
+
+
 
 class _Parser2:
     def _parse_texttrace(self, doc: pymupdf.Document, kpage: KPage):
@@ -982,7 +1038,7 @@ class LineParser:
         self._min_length = min_length  # 最小线长度
         self._gap_threshold = gap_threshold  # 线段间隙阈值，超过此值则分开
 
-    def parse(self, page: KPage, bbox: BBox) -> tuple[list[KLine], list[KLine]]:
+    def parse(self, page: KPage,paths:Sequence[Any]) -> tuple[list[KLine], list[KLine]]:
         # 线可能为很多个点，或者很多小段的线组成
         # 而且还包含文字的下划线，删除线
         # 第一步是先解析表格线
@@ -994,7 +1050,6 @@ class LineParser:
         # {'type':3,'color':0xffffff,'bbox':[]}
         # 现在采用按需解析，所以，一开始不会解析线，还是保留原始的数据结构
 
-        paths = bbox.transform(page.to_lt()).get(page.pdf_paths, ratio=0.6)
         if not paths:
             return ([], [])
         # TODO 后续去掉这个函数
@@ -1013,7 +1068,7 @@ class LineParser:
             return KColor.BLACK
 
         # 这里可以使用左下角或者左上角的坐标，都不影响
-        h_groups, v_groups = self.parse2([p["bbox"] for p in paths])
+        h_groups, v_groups = self._parse([p["bbox"] for p in paths])
 
         def make_line(
             bboxes: Sequence[Any],
@@ -1052,7 +1107,7 @@ class LineParser:
         v_lines = make_lines(v_groups, is_h=False)
         return (h_lines, v_lines)
 
-    def parse2(
+    def _parse(
         self, rects: Sequence[_Rect]
     ) -> tuple[list[list[_Rect]], list[list[_Rect]]]:
         """解析，然后返回水平线和垂直线(h_lines,v_lines)，为了后续使用，这里没有对线合并，只是分组"""

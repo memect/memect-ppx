@@ -223,6 +223,7 @@ class Parser:
     @classmethod
     def batch(cls,args:Any,docs:Iterable[KDocumentFactory],*,max_workers:int=0,timeout:float|None=None):
         """
+        批量执行，这个方法仅仅合适在命令行下执行，或者在一个新的进程执行
         args:
         docs:
         max_workers:
@@ -235,10 +236,13 @@ class Parser:
         if isinstance(docs,Sized):
             total=len(docs)
         if max_workers==0:
-            for doc in docs:
-                cls(args).parse(doc())
-                n+=1
-                cls._logger.info('第[%s/%s]个解析成功',n,total)
+            #在当前进程执行，方便测试
+            with cls(args) as parser:
+                for doc in docs:
+                    parser.parse(doc())
+                    n+=1
+                    cls._logger.info('第[%s/%s]个解析成功',n,total)
+            timer.mark('endparse')
         else:
             mp_context = mp.get_context('spawn')
             mp_stopped = mp_context.Value('b',False)

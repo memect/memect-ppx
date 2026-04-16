@@ -12,7 +12,7 @@ class Parser:
         self._table_det: Final = ModelExecutor.get("table_det")
         self._table_det_key: Final = "cache/default/table_det"
     
-    def parse(self,doc:KDocument):
+    def parse(self,doc:KDocument,*,max_workers:int=0):
         pass
 
     def parse_page(self,page:KPage):

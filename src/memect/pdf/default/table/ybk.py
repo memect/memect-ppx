@@ -5,7 +5,7 @@ from typing import Callable, Sequence
 
 from memect.base.bbox import BBox
 from memect.base.debug import XDebugger
-from memect.pdf.base import KDocument, KLine, KPage, KRect, KTable, VObject
+from memect.pdf.base import KDocument, KLine, KPage, KTable, VObject
 from memect.pdf.grid import Grid
 from .line import Liner
 
@@ -23,13 +23,15 @@ class Parser:
 
     def parse_page(self,page:KPage):
         """"""
+        #TODO 有时候一个大的表格会被识别为多个，需要在这里做些处理吗？
+
         i=0
         for vobj in page.vobjects:
             if vobj.is_table():
                 self.parse_table(page, vobj, index=i)
                 i += 1
 
-    def parse_table(self, page: KPage, vobj: VObject, index: int = 0) -> KTable:
+    def parse_table(self, page: KPage, vobj: VObject, index: int = 0):
         debugger = self._debugger.bind(page=page.number)
         # 对于ocr字符，没有
         pdf_chars = vobj.bbox.get(page.pdf_chars, ratio=0.7)
@@ -38,11 +40,10 @@ class Parser:
         figures = vobj.bbox.get(page.pdf_figures, ratio=0.8)
         bbox = BBox.join2([vobj, *chars, *figures])
         #获得来自pdf或者图片的线
-        source, h_lines, v_lines = self._parse_lines(page,bbox.expand(dx=2,dy=3,bound=page.bbox))
+        source,h_lines,v_lines = self._parse_lines(page,bbox.expand(dx=2,dy=3,bound=page.bbox))
         raw_lines = h_lines+v_lines
         #再清理一下，避免误差，更好的解析表格，然后还可以再次
         table_lines = Liner().parse([line.bbox for line in raw_lines],page=page)
-        raw_table_lines=table_lines
         table_bbox=bbox
         if table_lines:
             #因为没有包括线的宽度，所以这里大一点
@@ -53,16 +54,22 @@ class Parser:
                 #虽然识别了线，但是可能只是局部的，也抛弃
                 table_lines=[]
         
-
-        if table_lines:
-            grid = Grid(table_lines,chars)
-            grid.draw(image=page.image.copy(),scale=page.image.width/page.width,show=True).show()
-            pass
-        else:
-            #理解为单行单列的表格
-            pass
         
+        if not table_lines:
+            #理解为单行单列的表格，或者截图？
+            table_lines=[
+                (table_bbox[0],table_bbox[1],table_bbox[2],table_bbox[1]),
+                (table_bbox[2],table_bbox[1],table_bbox[2],table_bbox[3]),
+                (table_bbox[0],table_bbox[3],table_bbox[2],table_bbox[3]),
+                (table_bbox[0],table_bbox[1],table_bbox[0],table_bbox[3])
+            ]
+
+        
+        grid = Grid(table_lines,chars)
+        page.objects.append(KTable.from_grid(page,grid))
+
         if debugger.allow("draw"):
+            grid.draw(image=page.image.copy(),scale=page.image.width/page.width,show=True).show()
             page.draw(
                 ("page", None),
                 ("pdf_chars", [vobj,*pdf_chars]),
@@ -81,14 +88,14 @@ class Parser:
         if h_lines or v_lines:
             return "pdf", h_lines, v_lines
         h_lines, v_lines = self._parse_image_lines(page, bbox)
-        return "image", h_lines, v_lines
+        return "image", h_lines,v_lines
 
     def _parse_pdf_lines(
         self, page: KPage, bbox: BBox
     ) -> tuple[list[KLine], list[KLine]]:
-        from ..pdf import LineParser
-
-        return LineParser().parse(page, bbox)
+        lines = bbox.get(page.pdf_lines,ratio=0.5)
+        return KLine.split(lines)
+        
 
     def _parse_image_lines(
         self, page: KPage, bbox: BBox

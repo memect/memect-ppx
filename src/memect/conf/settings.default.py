@@ -1,5 +1,6 @@
 import logging
 import os
+import platform
 from pathlib import Path
 from typing import Any, Final
 
@@ -29,6 +30,9 @@ def is_force_gpu() -> bool:
     else:
         return False
 
+
+def is_apple_silicon():
+    return platform.processor() == 'arm' and platform.system() == 'Darwin'
 
 _gpus: Final[dict[str, bool]] = {}
 
@@ -111,10 +115,18 @@ def get_value(name: str, default: str | int | float | bool | None) -> Any:
 def get_ocr_engine() -> str:
     if use_gpu("onnxruntime"):
         return "onnxruntime"
+    elif is_apple_silicon():
+        return 'onnxruntime'
     else:
-        # cpu下这个更快
+        #amd/intel,cpu下这个更快
         return "openvino"
 
+def get_cpu_engine():
+    #TODO 目前最底层还是都是使用cpu，还没有使用CoreML，这个有很多错误
+    if is_apple_silicon():
+        return 'onnxruntime'
+    else:
+        return 'openvino'
 
 def get_model_path(file: str | Path) -> str | None:
     file = Path(file).absolute()
@@ -170,7 +182,7 @@ _paddle_layout_v2 = {
     # 还是先使用这个名字
     "aside_text": "other_text",
     # v2特有的，获得垂直书写的，如果是英文，通常还顺时针旋转90度
-    #'vertical_text': 'text',
+    'vertical_text': 'text',
     # 如：来源：xxxxx
     "vision_footnote": "text",
 }
@@ -294,7 +306,7 @@ settings: dict[str, Any] = {
                             # cpu下，openvino快一些
                             "engine_type": "onnxruntime"
                             if use_gpu("onnxruntime")
-                            else "openvino",
+                            else get_cpu_engine(),
                             "model_dir_or_path": get_model_path(
                                 "./models/layout/pp_doc_layoutv2.onnx"
                             ),
@@ -311,7 +323,7 @@ settings: dict[str, Any] = {
                             # or "openvino"
                             "engine_type": "onnxruntime"
                             if use_gpu("onnxruntime")
-                            else "openvino",
+                            else get_cpu_engine(),
                             "model_dir_or_path": get_model_path(
                                 "./models/layout/pp_doc_layoutv3.onnx"
                             ),
@@ -344,7 +356,7 @@ settings: dict[str, Any] = {
                             # or "openvino"
                             "engine_type": "onnxruntime"
                             if use_gpu("onnxruntime")
-                            else "openvino",
+                            else get_cpu_engine(),
                             "model_dir_or_path": get_model_path(
                                 "./models/layout/pp_doc_layoutv3.onnx"
                             ),

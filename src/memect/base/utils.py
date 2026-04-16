@@ -1,6 +1,8 @@
+import contextlib
 import logging
 import re
 import shutil
+import signal
 import sys
 import threading
 import time
@@ -14,6 +16,7 @@ from typing import Any, Callable, Final, Mapping, Self, Sequence, override
 import PIL
 import PIL.Image
 import orjson
+import psutil
 from pydantic import BaseModel
 from rich.console import Console
 from rich.theme import Theme
@@ -256,6 +259,93 @@ def safe_write(file: str | Path, data:Any, *, encoding: str = "utf-8"):
         temp_file.unlink(True)
 
 
+
+def kill_process(process:int|psutil.Process,timeout:float=30,kill_self:bool=True):
+    """杀死指定的进程"""
+    logger = logging.getLogger(f'{__name__}')
+    try:
+        if isinstance(process,int):
+            process = psutil.Process(process)
+        children = process.children(recursive=True)
+        #print(f'start terminate process={process.pid},name={process.name()},children={[p.pid for p in children]},cmdline={process.cmdline()}')
+        logger.info('start kill children,process=%s,children=%s',process.pid,[p.pid for p in children])
+        kill_processes(children,timeout=timeout)
+        #在几十核心的至强服务器，这个有时候非常慢，需要10秒以上
+        if kill_self: 
+            logger.info('start terminate self,process=%s',process.pid)
+            process.terminate()
+            process.wait(timeout=2)
+            logger.info('end terminate self,process=%s',process.pid)
+    except psutil.Error:
+        #进程不存在等
+        pass
+    except Exception:
+        logger.exception('')
+    finally:
+        if kill_self and isinstance(process,psutil.Process):
+            try:
+                process.kill()
+            except psutil.Error:
+                pass
+
+def kill_processes(processes:list[psutil.Process],timeout:float=30):
+    logger = logging.getLogger(f'{__name__}')
+    def on_terminate(process:psutil.Process):
+        #print(f'successful terminate process={process.pid},cmdline={process.cmdline()}')
+        pass
+    
+    #TODO  psutil和subprocess.Popen,multiprocessing.Process的内部实现
+    #都会调用os.waitpid()，这个方法检查到进程完成后，就会清除状态了，也就是对于同一个进程的退出状态，
+    #只能够有一次调用获得。所以，这3个对象，只能够使用一个。因为现在这里为程序退出的处理，就可以使用
+    #否则不要使用psutil来退出
+    #pid = os.getpid()
+    for p in processes:
+        # or p.terminate()
+        try:
+            #print(f'start terminate process={p.pid},name={p.name()},cmdline={p.cmdline()}')
+            logger.info('start terminate process=%s',p.pid)
+            if sys.platform=='win32':
+                #如果是windows，先发送这个signal，因为signal.SIGTERM等同于直接terminate()
+                #而且当前主要是支持office的执行，对于其他的命令，请在linux执行
+                p.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                #可能ctrl+c,signal.SIGINT更好？
+                p.send_signal(signal.SIGTERM)
+        except psutil.Error:
+            #主要是进程不存在了
+            pass
+        except Exception:
+            logger.exception('')
+            pass
+    gone, alive = psutil.wait_procs(processes, timeout=timeout,
+                                    callback=on_terminate)
+    if alive:
+        # send SIGKILL
+        for p in alive:
+            try:
+                p.kill() #等同于 p.send_signal(signal.SIGKILL)
+            except psutil.Error:
+                pass
+        gone, alive = psutil.wait_procs(
+            alive, timeout=timeout, callback=on_terminate)
+        if alive:
+            # give up
+            for p in alive:
+                #print(f'无法终止的进程,process={p.pid},cmdline={p.cmdline()}')
+                logger.warning('无法终止的进程,process=%s',p.pid)
+    return (gone, alive)
+
+
+def kill_child_processes(process:int,timeout:float=30):
+    kill_process(process,timeout=timeout,kill_self=False)
+
+@contextlib.contextmanager
+def safe_run():
+    try:
+        yield
+    finally:
+        #删除所有的子进程
+        pass
 class MyBaseModel(BaseModel):
     @classmethod
     def create(cls, args: Self | Mapping[str, Any] | str | Path | None) -> Self:
