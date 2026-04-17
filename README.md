@@ -49,7 +49,27 @@ The parsed Markdown is written to `document.pdf.out/doc.md`.
 
 ## Benchmarks
 
-> Screenshots and accuracy scores coming soon.
+Benchmark results and scripts will be added here.
+
+Our benchmark evaluation is based on the OmniDocBench dataset and evaluation
+pipeline:
+
+- Repository: [OpenDataLab / OmniDocBench](https://github.com/opendatalab/OmniDocBench/tree/main)
+- Paper: [OmniDocBench: Benchmarking Diverse PDF Document Parsing with Comprehensive Annotations](https://arxiv.org/abs/2412.07626)
+
+Compliance note:
+
+- The OmniDocBench repository is published under Apache-2.0.
+- OmniDocBench also states that its dataset is for research purposes only and
+  not for commercial use.
+- If you reuse benchmark data, derived evaluation assets, or reported results,
+  review the upstream dataset terms and copyright statement before any
+  commercial redistribution or marketing use.
+
+Acknowledgment:
+
+- We thank the OmniDocBench authors and OpenDataLab for providing the public
+  benchmark and evaluation tooling used for PPX benchmarking.
 
 ---
 

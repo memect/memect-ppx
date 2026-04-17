@@ -49,7 +49,22 @@ ppx parse document.pdf
 
 ## 基准测试
 
-> 截图和精度数据即将发布。
+后续会在此补充 benchmark 结果与评测脚本说明。
+
+当前 PPX 的 benchmark 评测基于 OmniDocBench 数据集与评测流程：
+
+- 仓库：[OpenDataLab / OmniDocBench](https://github.com/opendatalab/OmniDocBench/tree/main)
+- 论文：[OmniDocBench: Benchmarking Diverse PDF Document Parsing with Comprehensive Annotations](https://arxiv.org/abs/2412.07626)
+
+合规说明：
+
+- OmniDocBench 仓库代码采用 Apache-2.0 发布。
+- OmniDocBench 同时声明其数据集仅限研究用途，不可用于商业用途。
+- 如需复用 benchmark 数据、派生评测产物或对外展示评测结果，请先核对上游数据集条款与版权声明，避免超出许可边界使用。
+
+致谢：
+
+- 感谢 OmniDocBench 作者团队与 OpenDataLab 提供公开 benchmark 与评测工具，支持 PPX 的基准测试工作。
 
 ---
 
