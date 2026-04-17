@@ -1,6 +1,8 @@
 # PPX — High-Accuracy PDF & Image Parser
 
-![PPX Logo](docs/images/logo.png)
+<div align="center">
+<img src="docs/images/logo.png" alt="PPX Logo" width="200"/>
+</div>
 
 [![PyPI version](https://img.shields.io/pypi/v/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
@@ -40,12 +42,10 @@ The parsed Markdown is written to `document.pdf.out/doc.md`.
 | Problem | How PPX Handles It |
 | ------- | ------------------ |
 | Native-text PDF with invisible/garbled characters | Detects encoding anomalies; falls back to OCR per page |
-| Scanned document with no embedded text | Full-page OCR with RapidOCR (CPU) or vLLM backend |
-| Complex table spanning multiple columns/rows | TableCls + LLM-based structural parsing, `colspan`/`rowspan` preserved |
-| Watermarked or low-quality scan | `--remove-watermark` pre-processing step |
-| Math-heavy academic paper | LaTeX formula extraction via `--formula` |
+| Scanned document with no embedded text | Full-page OCR or vLLM backend |
+| Complex table spanning multiple columns/rows | LLM-based structural parsing, `colspan`/`rowspan` preserved |
+| Math-heavy academic paper | LaTeX formula extraction |
 | Batch processing thousands of files | Directory-level `parse dir/` with `-o output/` |
-| Multi-page image set (e.g. scanned book pages) | `--images` flag treats a directory as a single document |
 
 ---
 
@@ -64,7 +64,6 @@ The parsed Markdown is written to `document.pdf.out/doc.md`.
 | Table structure (colspan / rowspan) | ✅ | ✅ | ✅ | ✅ |
 | Formula → LaTeX | ✅ | ✅ | ✅ | ✅ |
 | Figure region extraction | ✅ | ✅ | ✅ | ✅ |
-| Watermark removal | ✅ | ✅ | ✅ | ✅ |
 | CPU-only mode | ✅ | ✅ | ✅ | ✅ |
 | CUDA acceleration | ✅ | ✅ | ✅ | ✅ |
 | No external service required | ✅ | ❌ | ❌ | ❌ |
@@ -109,9 +108,6 @@ ppx parse docs/
 
 # Write output to a specific directory
 ppx parse docs/ -o output/
-
-# Treat all images in a directory as consecutive pages of one document
-ppx parse scans/ --images
 ```
 
 ### Use an LLM backend
@@ -143,11 +139,9 @@ mkdir conf
 ```python
 # conf/settings.py
 settings = {
-    "deepseek": {
-        "base_url": "http://127.0.0.1:4000/v1",
-        "model": "deepseek-ocr-2",
-        "api_key": "",
-    }
+    "pdf_parser.deepseek.model.base_url": "http://127.0.0.1:4000/v1",
+    "pdf_parser.paddle.model.base_url": "http://127.0.0.1:4001/v1",
+    "pdf_parser.glm.model.base_url": "http://127.0.0.1:4002/v1",
 }
 ```
 
@@ -243,18 +237,14 @@ Options:
   --table       no | ybk | wbk | auto | llm          (default: auto)
   --pages       Page range, e.g. "1-5,10"
   --remove-watermark  Enable watermark removal
-  --formula     Extract formulas as LaTeX
   --mode        page | tree | ppt                    (default: page)
   -o, --output  Output directory
-  --images      Treat directory as a multi-page document
-  --set         Override any config key, e.g. --set deepseek.api_key=xxx
 ```
 
 Other subcommands:
 
 ```text
 ppx start               Launch HTTP API server
-ppx pdf2image <path>    Convert PDF pages to images
 ```
 
 ---
@@ -329,7 +319,7 @@ uv pip install opencv-contrib-python --no-config
 
 | Platform | Python | CPU | CUDA | Notes |
 | -------- | ------ | :-: | :--: | ----- |
-| Linux (Ubuntu >= 20.04) | >= 3.12 | ✅ | ✅ | Recommended for production |
+| Linux | >= 3.12 | ✅ | ✅ | Recommended for production |
 | macOS (Apple Silicon) | >= 3.12 | ✅ | ❌ | |
 | macOS (Intel) | 3.12 – 3.13 | ✅ | ❌ | Capped by OpenVINO |
 | Windows | >= 3.12 | ✅ | ✅ | Community-tested |
@@ -385,74 +375,6 @@ vllm serve ./hub/ZhipuAI/GLM-OCR \
 ```
 
 Model source: [ModelScope — ZhipuAI/GLM-OCR](https://modelscope.cn/models/ZhipuAI/GLM-OCR)
-
----
-
-## Docker Deployment
-
-### Docker Compose (recommended)
-
-```bash
-cd x2x
-
-# Build all images (TAG defaults to today's date, e.g. 20260416)
-TAG=$(date +%Y%m%d) docker compose build
-
-# Build a single service
-TAG=$(date +%Y%m%d) docker compose build apiserver
-
-# Push to registry
-TAG=20260416 docker compose push apiserver deepseek
-
-# Pull on another node
-TAG=20260416 docker compose pull apiserver deepseek
-
-# Start API server only
-TAG=20260416 docker compose up apiserver
-
-# Start API server + DeepSeek model
-TAG=20260416 docker compose up apiserver deepseek
-```
-
-Customise via `.env`:
-
-```bash
-cp .env.sample .env
-# edit .env to override ports, model paths, etc.
-```
-
-### Build individual images
-
-```bash
-# Requires Docker >= 23; use `docker buildx build` for older versions
-docker build --target apiserver -t ppx-apiserver .
-docker build --target deepseek  -t ppx-deepseek  .
-docker build --target paddle    -t ppx-paddle    .
-docker build --target glm       -t ppx-glm       .
-```
-
-### Run individual containers
-
-```bash
-# API server — GPU
-docker run --gpus all -it --rm -p 9527:9527 ppx-apiserver
-
-# API server — CPU only
-docker run -it --rm -p 9527:9527 ppx-apiserver
-
-# LLM backends
-docker run --gpus all -it --rm -p 4000:4000 ppx-deepseek
-docker run --gpus all -it --rm -p 4001:4001 ppx-paddle
-docker run --gpus all -it --rm -p 4002:4002 ppx-glm
-
-# Mount an external model directory
-docker run --gpus all -it --rm -p 4003:4003 \
-  -v ./hub:/apps/llm/hub ppx-llm vllm serve ...
-```
-
-> Limit GPU memory per container with `--gpu-memory-utilization 0.5` or `-e CUDA_VISIBLE_DEVICES=0`.
-
----
 
 ## FAQ
 
