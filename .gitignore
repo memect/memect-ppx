@@ -31,3 +31,4 @@
 !/docker-compose.yaml
 !/.env.sample
 
+**/**/others
