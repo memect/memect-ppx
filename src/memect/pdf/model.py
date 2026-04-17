@@ -1,7 +1,6 @@
-import atexit
 import logging
 import multiprocessing as mp
-import signal
+import os
 import threading
 import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
@@ -170,6 +169,7 @@ class ModelExecutor:
         self._model: Model | None = None
         self._executor: Executor | None = None
         self._thread_local: Final = threading.local()
+
         # 如果是简单的调度模式，直接使用进程或者线程Executor即可
         # 但是现在需要更大的调度算法，所以，如果是线程
         if self._use_api:
@@ -193,7 +193,7 @@ class ModelExecutor:
     @classmethod
     def _close(cls,executor:Executor|None,scheduler:Scheduler[Any,Any]|None):
         if executor:
-            executor.shutdown(False,cancel_futures=True)
+            executor.shutdown(True,cancel_futures=True)
         if scheduler:
             scheduler.close()
     
@@ -323,7 +323,7 @@ class ModelExecutor:
                 initializer=mp_init,
             )
         else:
-            return ThreadPoolExecutor(self._max_workers, initializer=self._init_thread)
+            return ThreadPoolExecutor(self._max_workers,thread_name_prefix=f'{self._model_cfg.name}_', initializer=self._init_thread)
 
     def _init_thread(self):
         if hasattr(self._thread_local, "model"):
@@ -356,35 +356,6 @@ class ModelExecutor:
     def _create_model(cls, cfg: ModelArgs) -> Model:
         return Model.create(cfg.name, *cfg.args, **cfg.kwargs)
 
-    _manager: ClassVar["ModelManager|None"] = None
-    _manager_lock: Final = threading.RLock()
-
-    @classmethod
-    def setup(cls, args: "ModelManagerArgs|Mapping[str,Any]|None" = None):
-        
-        with cls._manager_lock:
-            if cls._manager is None:
-                if not args:
-                    args = get_settings("model_manager")
-                cls._manager = ModelManager(args)
-                atexit.register(cls.shutdown)
-
-    @classmethod
-    def get(cls, name: str) -> "ModelExecutor":
-        with cls._manager_lock:
-            cls.setup()
-            assert cls._manager is not None
-            return cls._manager.get_executor(name)
-    
-    @classmethod
-    def shutdown(cls):
-        with cls._manager_lock:
-            if cls._manager is None:
-                return
-            cls._manager.shutdown()
-            
-            
-
 
 class ModelManagerArgs(MyBaseModel):
     executors: dict[str, ModelExecutorArgs] = Field(default_factory=dict)
@@ -394,8 +365,10 @@ class ModelManagerArgs(MyBaseModel):
 class ModelManager:
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, args: ModelManagerArgs | Mapping[str, Any]):
+    def __init__(self, args: ModelManagerArgs | Mapping[str, Any]|None=None):
         super().__init__()
+        if args is None:
+            args = get_settings('model_manager')
         args = ModelManagerArgs.create(args)
         self._executors: dict[str, ModelExecutor] = {}
         self._models:dict[str,ModelArgs]={}
@@ -407,7 +380,6 @@ class ModelManager:
 
         for name, executor_args in args.executors.items():
             if executor_args.enable:
-                
                 executor_args.name = name
                 if isinstance(executor_args.model,str):
                     self._logger.info("create model executor name=%s,model=%s", name,executor_args.model)
@@ -418,15 +390,27 @@ class ModelManager:
                 self._executors[name] = ModelExecutor(executor_args)
             else:
                 self._logger.info("disable model executor name=%s", name)
+        
+        self._finalizer = weakref.finalize(self,self._close,self._executors)
+    
+    @classmethod
+    def _close(cls,executors:dict[str,ModelExecutor]):
+        cls._logger.info('start close modelmanager')
+        executors2 = dict(executors)
+        executors.clear()
+        for name,executor in executors2.items():
+            cls._logger.info('close executor name=%s',name)
+            executor.close()
+        cls._logger.info('end close modelmanager')
 
-    def get_executor(self, name: str) -> ModelExecutor:
+    def close(self):
+        if self._finalizer.alive:
+            self._finalizer()
+
+    def get(self, name: str) -> ModelExecutor:
         return self._executors[name]
     
-    def shutdown(self):
-        executors = dict(self._executors)
-        self._executors.clear()
-        for name,executor in executors.items():
-            executor.close()
+
 
 
 class ApiModel(Model):
@@ -769,9 +753,6 @@ class TableClsModel(Model):
             results.append(label)
         return results
 
-
-class XXFormulaModel(Model):
-    pass
 
 
 class LLMModel(Model):

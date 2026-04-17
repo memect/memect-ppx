@@ -147,8 +147,6 @@ class ApiParams(MyBaseModel):
     remove_watermark: bool = False
     """True表示清除水印"""
 
-    use_llm: Annotated[bool, Field(description="")] = False
-    """如果为True且backend=default，表示使用llm，目前为deepseek，之前是给pdf2skills用"""
     backend: Backend = Backend.DEFAULT
     """deepseek,paddle,glm,default"""
 

@@ -27,27 +27,28 @@ def _parse_pages(pages: str | None) -> list[int]:
     return sorted(result)
 
 
-def _parse_size(s: str) -> tuple[int, int]:
-    p = s.split(",")
-    if len(p) == 2:
-        return (int(p[0]), int(p[1]))
-    else:
-        return (int(s), int(s))
-
-def _set_device(cpu:bool,gpu:str|None):
+def _set_device(cpu:bool,cuda:str|None|None=None,cann:str|None=None):
     if cpu:
-        #强制使用cpu
-        os.environ['FORCE_CPU']='true'
+        #强制使用cpu，即使当前支持gpu
+        os.environ['PPX__FORCE_CPU']='true'
     
-    if gpu:
-        os.environ['CUDA_VISIBLE_DEVICES']=gpu
+    if cuda:
+        #指定使用哪个设备
+        os.environ['CUDA_VISIBLE_DEVICES']=cuda
+    
+    if cann:
+        # 设置CANN设备（华为昇腾）
+        # 根据具体的深度学习框架设置
+        os.environ['ASCEND_DEVICE_ID'] = cann
+        # 或者对于某些框架：
+        # os.environ['NPU_VISIBLE_DEVICES'] = cann
 
 @app.command()
 def start(
     host: Annotated[str | None, typer.Option(help="监听地址")] = None,
     port: Annotated[int | None, typer.Option(help="监听端口")] = None,
     cpu: Annotated[bool,typer.Option(help='强制使用cpu，即使当前有gpu')]=False,
-    gpu:Annotated[str|None,typer.Option(help='指定使用哪些gpu，等同于CUDA_VISIBLE_DEVICES的设置')]=None,
+    cuda:Annotated[str|None,typer.Option(help='指定使用哪些gpu，等同于CUDA_VISIBLE_DEVICES的设置')]=None,
     kvs: Annotated[
         list[str] | None, typer.Option("--set", help='如：--set server.host="0.0.0.0"')
     ] = None,
@@ -59,14 +60,15 @@ def start(
     """启动服务"""
     from .app import App
     from .base.config import parse_kvs, setup
-    _set_device(cpu,gpu)
+    _set_device(cpu,cuda=cuda)
     custom_settings = parse_kvs(kvs)
     custom_log_settings = parse_kvs(log_kvs)
     if host is not None:
         custom_settings["server.host"] = host
     if port is not None:
         custom_settings["server.port"] = port
-    setup(settings=custom_settings, log_settings=custom_log_settings, env_prefix=None)
+    #自动配置日志
+    setup(settings=custom_settings, log_settings=custom_log_settings)
     App.run()
 
 
@@ -78,6 +80,8 @@ def parse(
         Path | None, typer.Option("-o", "--out-dir", help="输出目录")
     ] = None,
 
+    as_doc:Annotated[bool,typer.Option(help='当file为目录且这个为true，表示为一个文档连续的页面，如：1.png,2.png,3.png')]=False,
+
     max_workers:Annotated[int,typer.Option("-w","--workers",help='如果指定的file目录，可以设置同时执行多少个，0表示不使用多进程执行')]=0,
 
     pages: Annotated[str | None, typer.Option(help="页码范围，如 1-3,5")] = None,
@@ -87,38 +91,49 @@ def parse(
     paddle:Annotated[str|None,typer.Option(help="")]=None,
     glm:Annotated[str|None,typer.Option(help="")]=None,
 
-    mode:Annotated[ParseMode|None,typer.Option()]=None,
+    mode:Annotated[ParseMode|None,typer.Option(help="")]=None,
 
-    ocr:Annotated[OCRMode|None,typer.Option()]=None,
-    table:Annotated[TableMode|None,typer.Option()]=None,
+    ocr:Annotated[OCRMode|None,typer.Option(help="")]=None,
+    table:Annotated[TableMode|None,typer.Option(help="")]=None,
 
-    remove_watermark:Annotated[bool|None,typer.Option(help='设置是否需要清除水印')]=None,
+    #remove_watermark:Annotated[bool|None,typer.Option(help='设置是否需要清除水印')]=None,
     
     #all:Annotated[bool,typer.Option()]=None,
-    docx:Annotated[bool|None,typer.Option()]=None,
-    pptx:Annotated[bool|None,typer.Option()]=None,
-    md:Annotated[bool|None,typer.Option()]=None,
-    doc_json:Annotated[bool|None,typer.Option('--json')]=None,
+    docx:Annotated[bool|None,typer.Option(help="")]=None,
+    pptx:Annotated[bool|None,typer.Option(help="")]=None,
+    md:Annotated[bool|None,typer.Option(help="")]=None,
+    doc_json:Annotated[bool|None,typer.Option('--json',help="")]=None,
 
     cpu: Annotated[bool,typer.Option(help='强制使用cpu，即使当前有gpu')]=False,
-    gpu:Annotated[str|None,typer.Option(help='指定使用哪些gpu，等同于CUDA_VISIBLE_DEVICES的设置')]=None,
+    cuda:Annotated[str|None,typer.Option(help='指定使用哪些gpu，等同于CUDA_VISIBLE_DEVICES的设置')]=None,
 
-
-    dev: Annotated[bool|None, typer.Option(help="开发模式，跳过pdf2image")] = None,
-    debug:Annotated[bool,typer.Option('-x','--debug',help='')]=False,
+    #如果修改个别参数，通过--set --set-log 会简便
+    #如果修改多个参数，通过./conf/settings.py,./conf/log.py
+    kvs: Annotated[
+        list[str] | None, typer.Option("--set", help='如：--set server.host="0.0.0.0"')
+    ] = None,
+    log_kvs: Annotated[
+        list[str] | None,
+        typer.Option("--set-log", help='如：--set-log root.level="debug"'),
+    ] = None,
+    conf:Annotated[Path,typer.Option(help='自定义的配置目录')]=Path('./conf'),
+    dev: Annotated[bool|None, typer.Option(help="开发模式，保存中间结果和使用缓存结果，如果两次之间参数改变过大，建议删除缓存")] = None,
+    debug:Annotated[bool,typer.Option('-x','--debug',help='输出调试信息和调试图片等')]=False,
     params_text: Annotated[
         str | None, typer.Option("--params", help="解析参数，JSON 字符串")
     ] = None,
     params_file: Annotated[
         Path | None, typer.Option(help="解析参数文件，JSON 文件")
     ] = None,
+    dry:Annotated[bool,typer.Option(help='表示仅仅测试设置参数等，不执行')]=False
 ) -> None:
     """解析 PDF 文件"""
-    from .base.config import setup
+    from .base.config import setup,parse_kvs
     from .base.debug import XDebugger
     from .base.utils import kill_child_processes
-    from .pdf.base import KDocument,KDocumentFactory,ParseParams
+    from .pdf.base import KDocumentFactory,ParseParams
     from .pdf.parser import Parser
+    from .base.utils import console
 
     def set_custom_values(settings:dict[str,Any],text:str|None,prefix:str):
         if not text:
@@ -128,15 +143,23 @@ def parse(
             settings[f"{prefix}.{k}"]=v
     
     custom_settings:dict[str,Any]={}
-    _set_device(cpu,gpu)
+    log_custom_settings:dict[str,Any]={}
+    if kvs:
+        custom_settings.update(parse_kvs(kvs))
+    if log_kvs:
+        log_custom_settings.update(parse_kvs(log_kvs))
+    
+    #常用的设置，更加简便
     set_custom_values(custom_settings,deepseek,'pdf_parser.deepseek.model')
     set_custom_values(custom_settings,paddle,'pdf_parser.paddle.model')
     set_custom_values(custom_settings,glm,'pdf_parser.glm.model')
-    
-    setup(settings=custom_settings)
+
+    _set_device(cpu,cuda=cuda)
+
+    setup(settings=custom_settings,conf_dir=conf)
 
     if debug:
-        XDebugger.setup(Path('./xdebug.py'))
+        XDebugger.setup()
     
     params = ParseParams.create(params_file or params_text)
     if dev is not None:
@@ -150,12 +173,12 @@ def parse(
     if pages:
         params.pagenos = _parse_pages(pages)
     
-    if remove_watermark is not None:
-        params.remove_watermark=remove_watermark
+    #if remove_watermark is not None:
+        #params.remove_watermark=remove_watermark
     
-    if ocr:
+    if ocr is not None:
         params.ocr = ocr
-    if table:
+    if table is not None:
         params.table = table
 
     if pptx is not None:
@@ -175,6 +198,9 @@ def parse(
     def get_docs(dir_:Path):
         if dir_.is_file():
             yield KDocumentFactory(dir_,params,out_dir)
+        elif dir_.is_dir() and as_doc:
+            #表示为一个文档连续的页面，如：1.png,2.png,3.png
+            yield KDocumentFactory(dir_,params,out_dir)
         else:
             for file in dir_.iterdir():
                 if file.is_file() and file.name[0]!='.' and file.suffix.lower() in ('.pdf','.png','.jpg','.jpeg','.webp','.bmp'):
@@ -186,11 +212,18 @@ def parse(
                 else:
                     pass
     #考虑到文件数不会太多，为了获得总数，使用list
-    try:
-        Parser.batch(get_settings('pdf_parser'),list(get_docs(file)),max_workers=max_workers)
-    finally:
-        if max_workers>0:
-            kill_child_processes(os.getpid(),timeout=5)
+    if dry:
+        docs = list(get_docs(file))
+        console.print(params)
+        console.log(f'共需要解析:{len(docs)}')
+
+    else:
+        try:
+            Parser.batch(list(get_docs(file)),max_workers=max_workers)
+        finally:
+            pass
+            #if max_workers>0:
+                #kill_child_processes(os.getpid(),timeout=5)
 
 
 
@@ -232,8 +265,11 @@ def test(
     tester.run(dir)
 
 
-@app.command()
+@app.command(help='提前下载好需要的模型，方便docker制作')
 def download():
+    #ocr
+    #layout
+
     pass
 
 def main() -> None:

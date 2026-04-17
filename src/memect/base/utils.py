@@ -1,5 +1,5 @@
-import contextlib
 import logging
+import os
 import re
 import shutil
 import signal
@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 import weakref
-from concurrent.futures import BrokenExecutor, Executor
+from concurrent.futures import BrokenExecutor, Executor, ProcessPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable, Final, Mapping, Self, Sequence, override
@@ -20,8 +20,6 @@ import psutil
 from pydantic import BaseModel
 from rich.console import Console
 from rich.theme import Theme
-
-from .config import load_data
 
 # 不同的terminal下颜色显示不同，目的是因为terminal的背景颜色可以设置，为了在不同的背景下都显示友好
 # terminal会自动修改颜色的显示
@@ -182,7 +180,7 @@ class SafeExecutor(Executor):
 
             if old_impl:
                 t = threading.Thread(
-                    target=self._shutown_executor,
+                    target=self._shutdown_executor,
                     args=(old_impl, "空闲"),
                     daemon=True,
                     name="shutdown_executor",
@@ -191,11 +189,16 @@ class SafeExecutor(Executor):
 
             time.sleep(1)
 
-    def _shutown_executor(self, executor: Executor, reason: str):
+    def _shutdown_executor(self, executor: Executor, reason: str):
         self._shutdown_count += 1
         self._logger.info("第%s次关闭Executor，原因:%s", self._shutdown_count, reason)
         #关闭，不取消，等待，所以不影响正在运行的
-        executor.shutdown()
+        #有些情况下关闭不了，特别是ProcessPoolExecutor，一致在等子进程的退出
+        #executor.shutdown()
+        safe_shutdown(executor)
+    
+
+
 
     def _new_executor(self) -> Executor:
         with self._lock:
@@ -234,8 +237,66 @@ class SafeExecutor(Executor):
             impl = self._impl
 
         if impl:
-            impl.shutdown(wait, cancel_futures=cancel_futures)
+            #impl.shutdown(wait: bool = True, *, cancel_futures: bool = False)
+            safe_shutdown(impl,wait,cancel_futures=cancel_futures)
 
+def safe_shutdown(executor:Executor,wait: bool = True, *, cancel_futures: bool = False):
+    logger:Final = logging.getLogger(__name__)
+    if not isinstance(executor,ProcessPoolExecutor) or not hasattr(executor,'_processes'):
+        #如果子进程没有办法退出，wait=True的时候会一直等待
+        executor.shutdown(wait=wait,cancel_futures=cancel_futures)
+        return
+    
+    done=False
+    def do_shutdown():
+        nonlocal done
+        executor.shutdown(wait=wait,cancel_futures=cancel_futures)
+        done=True
+        logger.info('shutdown processe executor,wait=%s',wait)
+
+    threading.Thread(target=do_shutdown,daemon=True).start()
+    #等5秒钟如果不能够正常关闭
+    deadline=time.monotonic()+5
+    while True:
+        if done or deadline<time.monotonic():
+            break
+        time.sleep(0.2)
+    
+    
+    #没有完成或者没有等待的，也必须关闭
+    if not done or not wait:
+        processes = getattr(executor, '_processes', None)
+        pids:list[int]=[]
+        if processes:
+            pids  = list(processes.keys())
+        # 1. 发 SIGTERM
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+        # 2. 等待一段时间，轮询检查是否退出
+        deadline = time.monotonic() + 2.0
+        alive:list[int] = list(pids)
+        while alive and time.monotonic() < deadline:
+            time.sleep(0.05)
+            alive = []
+            for pid in pids:
+                try:
+                    os.kill(pid, 0)   # 只检查存活，不抢 waitpid
+                    alive.append(pid)
+                except OSError:
+                    pass  # 已退出
+
+        # 3. 仍存活的发 SIGKILL，让 executor 自己 reap
+        for pid in alive:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+        logger.info('kill process executor processes=%s', pids)
 
 def safe_write(file: str | Path, data:Any, *, encoding: str = "utf-8"):
     file = Path(file)
@@ -348,13 +409,7 @@ def kill_processes(processes:list[psutil.Process],timeout:float=30):
 def kill_child_processes(process:int,timeout:float=30):
     kill_process(process,timeout=timeout,kill_self=False)
 
-@contextlib.contextmanager
-def safe_run():
-    try:
-        yield
-    finally:
-        #删除所有的子进程
-        pass
+
 class MyBaseModel(BaseModel):
     @classmethod
     def create(cls, args: Self | Mapping[str, Any] | str | Path | None) -> Self:
@@ -366,6 +421,7 @@ class MyBaseModel(BaseModel):
             return cls.model_validate_json(args)
         elif isinstance(args, Path):
             # 后续支持json/yaml/py等格式？
+            from .config import load_data
             return cls.model_validate(load_data(args, py_name="settings"))
         else:
             return args
@@ -384,7 +440,8 @@ class AutoCleaner:
         self._finalizer: Final = weakref.finalize(self, self._clean, files)
 
     def __del__(self):
-        self._logger.info("gc autocleaner")
+        #self._logger.info("gc autocleaner")
+        pass
 
     def clean(self):
         """手动清除"""
@@ -399,29 +456,6 @@ class AutoCleaner:
             if file.is_dir():
                 shutil.rmtree(file)
             file.unlink(True)
-
-
-class thread_safe_cached_property:
-    def __init__(self, func: Callable[[Any], Any]):
-        self.func = func
-        self.attrname = None
-        self.__doc__ = func.__doc__
-
-    def __set_name__(self, owner: Any, name: str):
-        self.attrname = name
-        self.lock_name = f"_lock_{name}"
-
-    def __get__(self, instance: Any, owner: Any = None):
-        if instance is None:
-            return self
-
-        # 每个实例有自己的锁，互不影响
-        lock = instance.__dict__.setdefault(self.lock_name, threading.RLock())
-        with lock:
-            if self.attrname not in instance.__dict__:
-                instance.__dict__[self.attrname] = self.func(instance)
-        return instance.__dict__[self.attrname]
-
 
 def is_free_threaded() -> bool:
     # -Xgil=0

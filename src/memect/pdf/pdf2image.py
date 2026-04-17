@@ -356,22 +356,21 @@ class Pdf2Image:
         self._finalizer:Final=weakref.finalize(self, self._close,self._executor,self._scheduler)
 
     @classmethod
-    def _close(cls,executor:Executor|None,scheduler:Scheduler[Any,Any]|None,wait:bool=False):
-        cls._logger.info('close pdf2image')
+    def _close(cls,executor:Executor|None,scheduler:Scheduler[Any,Any]|None,wait:bool=True):
+        cls._logger.info('start close pdf2image')
         if scheduler:
             scheduler.close()
-
         if executor:
             executor.shutdown(cancel_futures=True, wait=wait)
+        cls._logger.info('end close pdf2image')
     
-    def close(self,wait:bool=False):
-        self._close(self._executor,self._scheduler,wait=wait)
+    def close(self):
+        if self._finalizer.alive:
+            self._finalizer()
         del self._executor
         del self._scheduler
-        if self._finalizer.alive:
-            self._finalizer.detach()
+
             
-    
     def __del__(self):
         self._logger.debug('gc %s',self)
 
