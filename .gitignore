@@ -11,13 +11,13 @@
 !/README_zh-CN.md
 !/docs/
 !/LICENSE
-!/MS_CLA.md
+!/PPX_CLA.md
 !/pyproject.toml
 !/.gitignore
 !/.dockerignore
 !/install
 !/.gitattributes
-!/.github/
+!/CONTRIBUTING.md
 
 
 **/.DS_Store
@@ -30,3 +30,5 @@
 !/docker-compose.yaml
 !/.env.sample
 
+docs/OPEN_SOURCE_CHECKLIST.md
+docs/TECh.md
