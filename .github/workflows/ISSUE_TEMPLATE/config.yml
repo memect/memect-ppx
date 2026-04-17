@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Q&A 社区问答 / Community Q&A
+    url: https://github.com/memect/mantis-shrimp/discussions/categories/q-a
+    about: 向社区寻求帮助 / Ask the community for help
+  - name: 💡 功能建议 / Feature Requests & Ideas
+    url: https://github.com/memect/mantis-shrimp/discussions/categories/ideas
+    about: 分享新功能想法 / Share ideas for new features
+  - name: 🌟 展示与分享 / Show and Tell
+    url: https://github.com/memect/mantis-shrimp/discussions/categories/show-and-tell
+    about: 展示你用此项目构建的作品 / Show off something you've built with this project

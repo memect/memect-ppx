@@ -1,0 +1,89 @@
+PPX
+Copyright (c) PPX contributors
+
+This project includes or redistributes third-party software and assets.
+The following notices are provided for attribution, compliance, and
+downstream redistribution clarity.
+
+This NOTICE file is for informational purposes only. License terms remain
+defined by the corresponding license files and upstream license texts.
+
+Included Third-Party Components
+===============================
+
+1. PDF.js
+
+   Path:
+   - src/memect/web/libs/pdfjs
+
+   Upstream project:
+   - PDF.js
+   - Mozilla and PDF.js contributors
+
+   Included license files:
+   - src/memect/web/libs/pdfjs/LICENSE
+   - src/memect/web/libs/pdfjs/web/cmaps/LICENSE
+   - src/memect/web/libs/pdfjs/web/standard_fonts/LICENSE_FOXIT
+   - src/memect/web/libs/pdfjs/web/standard_fonts/LICENSE_LIBERATION
+
+   Notes:
+   - This repository vendors PDF.js assets under src/memect/web/libs/pdfjs.
+   - Downstream redistributors should preserve the upstream license texts
+     shipped with those files.
+
+2. Bundled Font Assets
+
+   Path:
+   - src/memect/pdf/fonts
+
+   Included assets currently present in this repository include:
+   - SourceHanSans-Bold.ttc
+   - SourceHanSans-Regular.ttc
+   - SourceHanSerif-Bold.ttc
+   - SourceHanSerif-Regular.ttc
+   - NotoSansSymbols2-Regular.ttf
+   - wingdings.ttf
+   - wingdings2.ttf
+   - wingdings3.ttf
+   - webdings.ttf
+
+   Notes:
+   - Font files may be subject to license terms different from the main
+     project license.
+   - Some bundled fonts appear suitable for redistribution under
+     redistribution-friendly font licenses based on embedded metadata,
+     including Noto Sans Symbols 2 and Source Han font files.
+   - Some symbol fonts currently present in this repository appear to be
+     Microsoft-origin fonts whose embedded license text refers to product
+     EULA terms rather than a repository-friendly redistribution grant.
+   - Those higher-risk fonts should be reviewed and likely removed from the
+     public source repository before GitHub release unless maintainers can
+     independently confirm redistribution rights.
+   - See docs/THIRD_PARTY_LICENSES.md for the detailed assessment.
+
+3. Other Runtime Dependencies
+
+   PPX depends on additional third-party Python packages and related
+   libraries declared in pyproject.toml. Those dependencies are not
+   necessarily redistributed inside this source tree, but they remain
+   subject to their own license terms.
+
+   Maintainers should review:
+   - direct Python dependencies
+   - transitive native dependencies
+   - model weights, if later bundled
+   - sample documents, if later added
+
+Project-Specific Reminder
+=========================
+
+The main PPX project license does not automatically replace or supersede
+the license terms of bundled third-party code, fonts, assets, or models.
+
+Before public GitHub release, maintainers should confirm:
+
+- all vendored third-party files have preserved upstream license texts
+- all bundled fonts are approved for redistribution
+- all future sample files are legally redistributable
+- any newly bundled models or assets are documented here or in a more
+  detailed third-party license manifest

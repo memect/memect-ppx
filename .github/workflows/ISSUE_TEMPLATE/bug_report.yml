@@ -1,0 +1,105 @@
+name: Bug Report
+description: 提交 Bug 报告 / Submit a bug report
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前检查 / Pre-submission Checklist
+      description: 提交前请确认以下事项 / Please confirm the following before submitting
+      options:
+        - label: 我已搜索过现有 [Issues](../../issues)，确认此问题尚未被报告 / I have searched existing Issues and this has not been reported
+          required: true
+        - label: 我已阅读 [README](../../blob/master/README.md) 和相关文档 / I have read the README and relevant documentation
+          required: true
+        - label: 我已在 [Discussions](../../discussions) 中搜索过相关讨论 / I have searched Discussions for related topics
+          required: true
+
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Bug 描述 / Bug Description
+      description: |
+        清晰简洁地描述 Bug 是什么 / A clear and concise description of what the bug is.
+        请附上报错信息截图或控制台完整输出 / Please include screenshots or full console output with error messages.
+      placeholder: |
+        描述你遇到的问题...
+        Describe the issue you encountered...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤 / Steps to Reproduce
+      description: |
+        提供能稳定复现问题的最小示例 / Provide a minimal example that reliably reproduces the issue.
+      placeholder: |
+        1. 执行命令 '...' / Run command '...'
+        2. 输入数据 '...' / With input '...'
+        3. 观察到错误 '...' / See error '...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为 / Expected Behavior
+      description: 描述你期望发生的结果 / Describe what you expected to happen.
+      placeholder: |
+        我期望... / I expected...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为 / Actual Behavior
+      description: 描述实际发生的结果，附上完整的错误日志 / Describe what actually happened, include full error logs.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统 / Operating System
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: 系统版本 / OS Version
+      placeholder: "e.g. Ubuntu 22.04 / Windows 11 / macOS 14.4"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python 版本 / Python Version
+      placeholder: "e.g. 3.11.5"
+    validations:
+      required: true
+
+  - type: input
+    id: package-version
+    attributes:
+      label: 项目版本 / Package Version
+      description: 运行 `pip show mantis-shrimp` 或查看 `pyproject.toml` / Run `pip show mantis-shrimp` or check `pyproject.toml`
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息 / Additional Context
+      description: 任何有助于定位问题的额外信息（硬件配置、网络环境等）/ Any additional context that may help diagnose the issue (hardware specs, network environment, etc.)

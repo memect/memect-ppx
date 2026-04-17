@@ -8,12 +8,18 @@
 !/docker-entrypoint.sh
 !/Dockerfile
 !/README.md
+!/README_zh-CN.md
+!/docs/
+!/LICENSE
+!/PPX_CLA.md
 !/pyproject.toml
 !/.gitignore
 !/.dockerignore
 !/install
 !/.gitattributes
-
+!/CONTRIBUTING.md
+!/THIRD_PARTY_LICENSES.md
+!/NOTICE
 
 **/.DS_Store
 **/__pycache__/**
@@ -25,3 +31,4 @@
 !/docker-compose.yaml
 !/.env.sample
 
+**/**/others
