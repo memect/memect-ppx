@@ -6,7 +6,7 @@
 [![PyPI downloads](https://img.shields.io/pypi/dm/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.12-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-LGPL--3.0-blue)](LICENSE)
-[![Issues](https://img.shields.io/github/issues/memect/ppx)](https://github.com/memect/ppx/issues)
+[![Issues](https://img.shields.io/github/issues/memect/memect-ppx)](https://github.com/memect/memect-ppx/issues)
 
 [English](README.md) | 简体中文
 
@@ -27,11 +27,14 @@ PPX 是一款开源文档解析引擎，专为高保真提取 PDF 和图片中�
 ## 30 秒上手
 
 ```bash
+uv pip install memect-ppx onnxruntime opencv-contrib-python
+# 或
 pip install memect-ppx onnxruntime opencv-contrib-python
-ppx parse document.pdf
+ppx parse document.pdf -o output/
 ```
 
-解析结果写入 `document.pdf.out/doc.md`。
+PPX 默认使用 pipeline 模式；指定 `-o output/` 时，解析结果通常写入
+`output/doc.md`。
 
 ---
 
@@ -47,24 +50,42 @@ ppx parse document.pdf
 
 ---
 
+## 示例结果
+
+### 图文混合表格
+
+下面这个示例展示了一种较常见的混合场景：表格主体包含可编辑文字，但表头的大部分区域仍然是图片。
+
+输入局部：
+
+![输入局部](docs/release/assets/局部图片/ori_image.png)
+
+Markdown 输出：
+
+![Markdown 输出](docs/release/assets/局部图片/pdf2md.png)
+
+JSON 输出：
+
+![JSON 输出](docs/release/assets/局部图片/pdf2json.png)
+
+### 英文扫描件表格
+
+下面这个示例展示了英文扫描件表格的解析结果。
+
+Markdown 输出：
+
+![英文扫描件 Markdown 输出](docs/release/assets/英文扫描件表格解析/pdf2md.png)
+
+JSON 输出：
+
+![英文扫描件 JSON 输出](docs/release/assets/英文扫描件表格解析/pdf2json.png)
+
+---
+
 ## 基准测试
 
-后续会在此补充 benchmark 结果与评测脚本说明。
-
-当前 PPX 的 benchmark 评测基于 OmniDocBench 数据集与评测流程：
-
-- 仓库：[OpenDataLab / OmniDocBench](https://github.com/opendatalab/OmniDocBench/tree/main)
-- 论文：[OmniDocBench: Benchmarking Diverse PDF Document Parsing with Comprehensive Annotations](https://arxiv.org/abs/2412.07626)
-
-合规说明：
-
-- OmniDocBench 仓库代码采用 Apache-2.0 发布。
-- OmniDocBench 同时声明其数据集仅限研究用途，不可用于商业用途。
-- 如需复用 benchmark 数据、派生评测产物或对外展示评测结果，请先核对上游数据集条款与版权声明，避免超出许可边界使用。
-
-致谢：
-
-- 感谢 OmniDocBench 作者团队与 OpenDataLab 提供公开 benchmark 与评测工具，支持 PPX 的基准测试工作。
+详见 [docs/BENCHMARKS.md](docs/BENCHMARKS.md)，其中包含 benchmark 结果、
+引用、致谢与合规说明。
 
 ---
 
@@ -96,6 +117,15 @@ ppx parse document.pdf
 ---
 
 ## 快速开始
+
+### 默认 pipeline 模式
+
+```bash
+ppx parse <input_path> -o <output_path>
+
+# 示例
+ppx parse report.pdf -o output/
+```
 
 ### 解析单个文件
 
@@ -166,7 +196,7 @@ ppx parse report.pdf --backend deepseek
 
 ---
 
-## Python API
+## Use from python
 
 PPX 可直接作为库使用。`Parser` 设计为一次初始化、多次复用。
 
@@ -249,7 +279,7 @@ ppx parse <path> [OPTIONS]
   --ocr         yes | no | auto                      （默认：auto）
   --table       no | ybk | wbk | auto | llm          （默认：auto）
   --pages       页面范围，例如 "1-5,10
-  --mode        page | tree | ppt                    （默认：page）
+  --mode        page | tree                  （默认：page）
   -o, --output  输出目录
 ```
 
@@ -309,7 +339,7 @@ uv pip install opencv-contrib-python --no-config
 ### 方式二：从源码安装
 
 ```bash
-git clone https://github.com/memect/ppx.git
+git clone https://github.com/memect/memect-ppx.git
 cd ppx
 uv venv -p 3.12
 source .venv/bin/activate

@@ -6,7 +6,7 @@
 [![PyPI downloads](https://img.shields.io/pypi/dm/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.12-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-LGPL--3.0-blue)](LICENSE)
-[![Issues](https://img.shields.io/github/issues/memect/ppx)](https://github.com/memect/ppx/issues)
+[![Issues](https://img.shields.io/github/issues/memect/memect-ppx)](https://github.com/memect/memect-ppx/issues)
 
 [简体中文](README_zh-CN.md) | English
 
@@ -27,11 +27,14 @@ PPX is an open-source document parsing engine built for high-fidelity extraction
 ## Get Started in 30 Seconds
 
 ```bash
+uv pip install memect-ppx onnxruntime opencv-contrib-python
+# or
 pip install memect-ppx onnxruntime opencv-contrib-python
-ppx parse document.pdf
+ppx parse document.pdf -o output/
 ```
 
-The parsed Markdown is written to `document.pdf.out/doc.md`.
+PPX uses the pipeline mode by default. The parsed Markdown is typically written
+to `output/doc.md` when `-o output/` is provided.
 
 ---
 
@@ -47,29 +50,43 @@ The parsed Markdown is written to `document.pdf.out/doc.md`.
 
 ---
 
+## Example Outputs
+
+### Mixed table content
+
+This example shows a mixed table scenario where the table body contains
+editable text, while much of the header area is still image-based.
+
+Input snippet:
+
+![Input snippet](docs/release/assets/局部图片/ori_image.png)
+
+Markdown output:
+
+![Markdown output](docs/release/assets/局部图片/pdf2md.png)
+
+JSON output:
+
+![JSON output](docs/release/assets/局部图片/pdf2json.png)
+
+### Scanned English table
+
+This example shows a scanned English table parsing result.
+
+Markdown output:
+
+![Scanned table Markdown output](docs/release/assets/英文扫描件表格解析/pdf2md.png)
+
+JSON output:
+
+![Scanned table JSON output](docs/release/assets/英文扫描件表格解析/pdf2json.png)
+
+---
+
 ## Benchmarks
 
-Benchmark results and scripts will be added here.
-
-Our benchmark evaluation is based on the OmniDocBench dataset and evaluation
-pipeline:
-
-- Repository: [OpenDataLab / OmniDocBench](https://github.com/opendatalab/OmniDocBench/tree/main)
-- Paper: [OmniDocBench: Benchmarking Diverse PDF Document Parsing with Comprehensive Annotations](https://arxiv.org/abs/2412.07626)
-
-Compliance note:
-
-- The OmniDocBench repository is published under Apache-2.0.
-- OmniDocBench also states that its dataset is for research purposes only and
-  not for commercial use.
-- If you reuse benchmark data, derived evaluation assets, or reported results,
-  review the upstream dataset terms and copyright statement before any
-  commercial redistribution or marketing use.
-
-Acknowledgment:
-
-- We thank the OmniDocBench authors and OpenDataLab for providing the public
-  benchmark and evaluation tooling used for PPX benchmarking.
+See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for benchmark results, citation,
+attribution, and compliance notes.
 
 ---
 
@@ -101,6 +118,15 @@ Acknowledgment:
 ---
 
 ## Quick Start
+
+### Default pipeline mode
+
+```bash
+ppx parse <input_path> -o <output_path>
+
+# Example
+ppx parse report.pdf -o output/
+```
 
 ### Parse a single file
 
@@ -171,7 +197,7 @@ ppx parse report.pdf --backend deepseek
 
 ---
 
-## Python API
+## Use from python
 
 PPX can be used directly as a library. `Parser` is designed to be instantiated once and reused.
 
@@ -254,8 +280,7 @@ Options:
   --ocr         yes | no | auto                      (default: auto)
   --table       no | ybk | wbk | auto | llm          (default: auto)
   --pages       Page range, e.g. "1-5,10"
-  --remove-watermark  Enable watermark removal
-  --mode        page | tree | ppt                    (default: page)
+  --mode        page | tree                    (default: page)
   -o, --output  Output directory
 ```
 
@@ -315,7 +340,7 @@ uv pip install opencv-contrib-python --no-config
 ### Option B — From source
 
 ```bash
-git clone https://github.com/memect/ppx.git
+git clone https://github.com/memect/memect-ppx.git
 cd ppx
 uv venv -p 3.12
 source .venv/bin/activate
