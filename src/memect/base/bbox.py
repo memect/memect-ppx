@@ -259,6 +259,13 @@ class BBox(tuple[float,float,float,float]):
             return True
         else:
             return False
+    
+    def align(self,axis:_Axis,other:_BBox,*,d:float=0)->bool:
+        if axis=='x':
+            x0,x1=0,2
+        else:
+            x0,x1=1,3
+        return abs(self[x0]-other[x0])<=d and abs(self[x1]-other[x1])<=d
 
     def is_valid(self) -> bool:
         """判断是否有效的，strict=True表示不允许x0==x1,y0==y1"""
@@ -470,7 +477,7 @@ class BBox(tuple[float,float,float,float]):
 
     @classmethod
     def join2(cls,objs:Sequence[Any],*,strict:bool=True):
-        bboxes:list[_BBox]=[]
+        bboxes:list[_BBox|None]=[]
         for obj in objs:
             bbox = cls.get_bbox(obj,strict=strict)
             bboxes.append(bbox)
