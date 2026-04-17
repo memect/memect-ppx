@@ -1,8 +1,6 @@
-# PPX — High-Accuracy PDF & Image Parser
-
-<div align="center">
-<img src="docs/images/logo.png" alt="PPX Logo" width="200"/>
-</div>
+<p align="center">
+  <img src="docs/images/logo.png" alt="PPX Logo" width="60" style="vertical-align:middle"/> &nbsp;<strong style="font-size:1.5em">PPX — High-Accuracy PDF & Image Parser</strong>
+</p>
 
 [![PyPI version](https://img.shields.io/pypi/v/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
@@ -429,3 +427,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 PPX is released under the [GNU Lesser General Public License v3.0 (LGPL-3.0)](LICENSE).
 
 LGPL-3.0 allows you to link this library into your applications — including commercial ones — without relicensing your own code. Modifications to PPX itself must be shared under the same license.
+
+For bundled third-party code and assets, see [NOTICE](NOTICE) and [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md). Those files document attribution and redistribution review items for vendored components and bundled resources shipped with this repository.

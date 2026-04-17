@@ -1,7 +1,5 @@
-# PPX — 高精度 PDF / 图片解析工具
-
 <p align="center">
-  <img src="docs/images/logo.png" alt="PPX Logo" width="200" />
+  <img src="docs/images/logo.png" alt="PPX Logo" width="60" style="vertical-align:middle"/> &nbsp;<strong style="font-size:1.5em">PPX — 高精度 PDF / 图片解析工具</strong>
 </p>
 
 [![PyPI version](https://img.shields.io/pypi/v/memect-ppx.svg)](https://pypi.org/project/memect-ppx/)
@@ -428,3 +426,5 @@ ppx parse report.pdf --pages "1-5,10,15-20"
 PPX 基于 [GNU Lesser General Public License v3.0 (LGPL-3.0)](LICENSE) 开源。
 
 LGPL-3.0 允许将本库链接到你的应用中（包括商业应用），无需开放你自己的代码。对 PPX 自身代码的修改须以相同协议共享。
+
+对于仓库内随附的第三方代码与资源，请同时参阅 [NOTICE](NOTICE) 和 [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md)。这两个文件用于说明仓库内 vendored 组件、打包资源的归属信息和发布前的再分发核查事项。
