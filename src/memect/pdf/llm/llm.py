@@ -124,7 +124,11 @@ class Model:
         self._scheduler = Scheduler(
             self._name, self.execute, **args.scheduler.model_dump()
         )
-    
+
+        
+
+    def close(self):
+        self._scheduler.close()
     
     def _create_openai(self, args: ModelArgs) -> OpenAI:
         # 实际上都不需要使用这个库，自己使用httpx.post即可，避免依赖第三方，因为就是一个简单的api请求

@@ -29,7 +29,7 @@ from memect.pdf.base import (
     VObject,
 )
 from memect.pdf.commons import FileInfo
-from memect.pdf.model import ModelExecutor
+from memect.pdf.model import ModelExecutor, ModelManager
 from memect.pdf.sort import Sorter
 
 from .footer import PageFooterParser
@@ -70,20 +70,20 @@ class DefaultParser:
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
     _debugger = XDebugger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, args: DefaultParserArgs | Mapping[str, Any] | None = None):
+    def __init__(self,manager:ModelManager, args: DefaultParserArgs | Mapping[str, Any] | None = None):
         super().__init__()
         self._args: Final = DefaultParserArgs.create(args)
-        self._layout_model: Final = ModelExecutor.get(self._args.layout)
+        self._layout_model: Final = manager.get(self._args.layout)
         self._layout_key: Final = "cache/default/layout"
-        self._formula_model: Final = ModelExecutor.get(self._args.formula)
+        self._formula_model: Final = manager.get(self._args.formula)
         self._formula_key: Final = "cache/default/formula"
-        self._ocr_model: Final = ModelExecutor.get(self._args.ocr)
+        self._ocr_model: Final = manager.get(self._args.ocr)
         self._ocr_key: Final = "cache/default/ocr"
         # self._llm_model:Final=ModelExecutor.get(self._args.llm)
         # self._llm_key:Final='cache/default/llm'
 
         self._pdf_parser: Final = PdfParser(self._args.pdf)
-        self._table_parser: Final = TableParser()
+        self._table_parser: Final = TableParser(manager)
 
         self._header_parser: Final = PageHeaderParser()
         self._footer_parser: Final = PageFooterParser()
@@ -111,6 +111,7 @@ class DefaultParser:
             self._header_parser.parse(doc)
             self._footer_parser.parse(doc)
             self._footnote_parser.parse(doc)
+            self._sort(doc)
             # TODO 如果有些排版是使用大表格的，这里也尝试还原？
             if doc.params.mode == ParseMode.TREE:
                 # 按页然后再解析章节树

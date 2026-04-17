@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from typing import Any, Final, Mapping, Sequence
+import weakref
 
 from pydantic import Field
 
@@ -72,6 +73,15 @@ class Deepseek:
         self._name:Final=args.name
         self._model:Final= create_model(args.model)
         self._llm_key=f'cache/{self._name}'
+        self._finalizer = weakref.finalize(self,self._close,self._model)
+    
+    @classmethod
+    def _close(cls,model:Model):
+        model.close()
+    
+    def close(self):
+        if self._finalizer.alive:
+            self._finalizer()
 
     def parse(self, doc: KDocument):
         doc.all_as_images()

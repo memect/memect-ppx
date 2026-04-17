@@ -229,10 +229,17 @@ class XDebugger:
         finally:
             self._lock.release()
 
+    _setup_lock:ClassVar[threading.RLock]=threading.RLock()
+    _setup_done:ClassVar[bool]=False
     @classmethod
-    def setup(cls, config: Mapping[str, Any] | str | Path):
+    def setup(cls, config: Mapping[str, Any] | str | Path|None=None):
         """字符串表示json字符串"""
-        cls._config = Config.create(config)
+        with cls._setup_lock:
+            if not cls._setup_done:
+                if config is None:
+                    config = Path('./xdebug.py')
+                cls._config = Config.create(config)
+                cls._setup_done=True
 
     @classmethod
     def get_config(cls) -> Config:

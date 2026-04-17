@@ -2,6 +2,7 @@
 import logging
 from collections import Counter
 from typing import Any, Final, Iterator, Mapping
+import weakref
 
 from pydantic import Field
 
@@ -9,7 +10,7 @@ from memect.base import images
 from memect.base.debug import XDebugger
 from memect.base.utils import MyBaseModel
 from memect.pdf.base import KDocument, KFormula, KMarkdown, KPage, KTable, VObject
-from memect.pdf.model import ModelExecutor
+from memect.pdf.model import ModelManager
 from .llm import Model, ModelArgs, Task
 
 v2 = [
@@ -162,15 +163,25 @@ class Paddle:
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
     _debugger = XDebugger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, args: PaddleArgs | Mapping[str, Any] | None = None):
+    def __init__(self,manager:ModelManager,args: PaddleArgs | Mapping[str, Any] | None = None):
         super().__init__()
         args = PaddleArgs.create(args)
         self.name:Final = args.name
         self._llm_model: Final = create_model(args.model)
-        self._layout_model:Final = ModelExecutor.get(args.layout)
+        self._layout_model:Final = manager.get(args.layout)
 
         self._llm_key:Final=f'cache/{self.name}/llm'
         self._layout_key:Final=f'cache/{self.name}/layout'
+
+        self._finalizer = weakref.finalize(self,self._close,self._llm_model)
+    
+    @classmethod
+    def _close(cls,model:Model):
+        model.close()
+    
+    def close(self):
+        if self._finalizer.alive:
+            self._finalizer()
 
     def parse(self, doc: KDocument):
         doc.all_as_images()

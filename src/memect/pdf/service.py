@@ -17,6 +17,7 @@ from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile
 
 from memect.base.api import ApiError, ApiInfo, FileType
+from memect.base.config import get_settings
 from memect.base.task import Saver, Task, TaskManager, TaskManagerArgs
 from memect.base.utils import AutoCleaner, MyBaseModel
 from .base import ApiParams, KDocument, ParseParams
@@ -72,10 +73,6 @@ class PdfServiceArgs(MyBaseModel):
     image: ImageSettings = Field(default_factory=ImageSettings)
     pdf: PdfSettings = Field(default_factory=PdfSettings)
     task_manager: TaskManagerArgs = Field(default_factory=TaskManagerArgs)
-    
-    use_process:bool=False
-    """True表示每次使用一个新的进程执行"""
-    parser: ParserArgs = Field(default_factory=ParserArgs)
 
 
 def format_size(size: int) -> str:
@@ -116,8 +113,10 @@ class MethodConfig(MyBaseModel):
 class PdfService:
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, args: PdfServiceArgs | Mapping[str, Any] | None = None):
+    def __init__(self,args: PdfServiceArgs | Mapping[str, Any] | None = None):
         super().__init__()
+        if args is None:
+            args = get_settings('pdf_service')
         args = PdfServiceArgs.create(args)
         self._settings: Final = args
         self._name: Final = args.name
@@ -132,12 +131,8 @@ class PdfService:
         self._files_dir:Final=self._data_dir/'files'
         self._keep_file_policy:Final=args.keep_file_policy
 
-        self._parser_args:ParserArgs|None=None
-        self._parser:Parser|None=None
-        if args.use_process:
-            self._parser_args = args.parser
-        else:
-            self._parser = Parser(args.parser)
+        #TODO 为了简便，使用默认的设置，否则就需要再传递参数
+        self._parser:Parser=Parser()
 
         def ensure_dir(dir:Path,clean:bool=False):
             if clean and dir.is_dir():
@@ -374,7 +369,7 @@ class PdfService:
         task = Task(
             task_id,
             doc.get_auto_cleaner(),
-            self._parser.new_runner(doc) if self._parser else Parser.new_process_runner(self._parser_args,doc),
+            self._parser.new_runner(doc),
             priority=doc.priority,
             async_=async_,
             saver=saver,

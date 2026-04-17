@@ -18,14 +18,14 @@ def is_running_in_docker() -> bool:
 def is_force_cpu() -> bool:
     """表示是否强制使用cpu"""
     # 在gpu环境下，强制使用cpu，目的是为了方便切换而不需要修改配置
-    if os.environ.get("FORCE_CPU"):
+    if os.environ.get("PPX_FORCE_CPU"):
         return True
     else:
         return False
 
 
 def is_force_gpu() -> bool:
-    if os.environ.get("FORCE_GPU"):
+    if os.environ.get("PPX_FORCE_GPU"):
         return True
     else:
         return False
@@ -38,13 +38,12 @@ def is_apple_silicon():
 _gpus: Final[dict[str, bool]] = {}
 
 
-def use_gpu(engine: str, vendor: str = "cuda") -> bool:
+def use_gpu(engine: str='onnxruntime', vendor: str = "cuda") -> bool:
     key = f"{engine}_{vendor}"
     if key not in _gpus:
         _gpus[key] = _use_gpu(engine, vendor=vendor)
         # from rich import get_console
         from memect.base.utils import console
-
         console.log(f"detect gpu,engine={engine},vendor={vendor},ok={_gpus[key]}")
     return _gpus[key]
 
@@ -64,7 +63,6 @@ def _use_gpu(engine: str, vendor: str = "cuda") -> bool:
     if engine == "onnxruntime":
         try:
             import onnxruntime
-
             if onnxruntime.get_device() != "GPU":
                 return False
             providers = onnxruntime.get_available_providers()
@@ -109,7 +107,8 @@ def get_value(name: str, default: str | int | float | bool | None) -> Any:
     try:
         return type_(value)
     except ValueError:
-        print(f"环境变量设置的值的无法转换为对应的类型，type={type_},{name}={value}")
+        from memect.base.utils import console
+        console.log(f"环境变量设置的值的无法转换为对应的类型，type={type_},{name}={value}")
         return default
 
 
@@ -117,6 +116,7 @@ def get_ocr_engine() -> str:
     if use_gpu("onnxruntime"):
         return "onnxruntime"
     elif is_apple_silicon():
+        #多数模型还是需要CPUExecutionProvider，CoreMLExecutionProvider很多不支持，出错
         return "onnxruntime"
     else:
         # amd/intel,cpu下这个更快
@@ -124,12 +124,19 @@ def get_ocr_engine() -> str:
 
 
 def get_cpu_engine():
-    # TODO 目前最底层还是都是使用cpu，还没有使用CoreML，这个有很多错误
     if is_apple_silicon():
+        #多数模型还是需要CPUExecutionProvider，CoreMLExecutionProvider很多不支持，出错
         return "onnxruntime"
     else:
         return "openvino"
 
+
+def get_engine():
+    """简便的方法，如果没有特别的要求的"""
+    if use_gpu():
+        return 'onnxruntime'
+    else:
+        return get_cpu_engine()
 
 def get_model_path(file: str | Path) -> str | None:
     file = Path(file).absolute()
@@ -322,6 +329,20 @@ settings: dict[str, Any] = {
                 # paddle or glm
                 "model": "paddle",
             },
+            "text_llm":{
+                "name": "",
+                "enable": True,
+                # 表示只需要一个即可，不需要通过每一个进程一个或者每个线程一个
+                "max_workers": 2,
+                "use_process": True,
+                "scheduler": {
+                    "policy": "fifo",
+                    # 因为这里使用单个模型，这个和后台llm的能力匹配即可
+                    "max_task_size": 10,
+                },
+                # paddle or glm
+                "model": "paddle",
+            }
         },
         "models": {
             # 这里的设置对应RapidOCR，然后必须使用具体的枚举类型，但是使用了这些，每次就必须载入RapidOCR这个库
@@ -385,13 +406,11 @@ settings: dict[str, Any] = {
                     "mapping": dict(_paddle_layout_v2),
                     "model_type": "pp_doc_layoutv2",
                     # cpu下，openvino快一些
-                    "engine_type": "onnxruntime"
-                    if use_gpu("onnxruntime")
-                    else get_cpu_engine(),
+                    "engine_type": get_engine(),
                     "model_dir_or_path": get_model_path(
                         "./models/layout/pp_doc_layoutv2.onnx"
                     ),
-                    "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
+                    "engine_cfg": {"use_cuda": use_gpu()},
                     "conf_thresh": 0.3,
                     "iou_thresh": 0.5,
                 },
@@ -402,13 +421,11 @@ settings: dict[str, Any] = {
                     "mapping": dict(_paddle_layout_v3),
                     "model_type": "pp_doc_layoutv3",
                     # or "openvino"
-                    "engine_type": "onnxruntime"
-                    if use_gpu("onnxruntime")
-                    else get_cpu_engine(),
+                    "engine_type": get_engine(),
                     "model_dir_or_path": get_model_path(
                         "./models/layout/pp_doc_layoutv3.onnx"
                     ),
-                    "engine_cfg": {"use_cuda": use_gpu("onnxruntime")},
+                    "engine_cfg": {"use_cuda": use_gpu()},
                     "conf_thresh": 0.3,
                     "iou_thresh": 0.5,
                 },
@@ -426,7 +443,7 @@ settings: dict[str, Any] = {
                         "max_tokens": 4000,
                         "temperature": 0,
                     },
-                    #"prompt": "Formula Recognition:",
+                    "prompt": "Formula Recognition:",
                     "prompts": {
                         "text": "OCR:",
                         "formula": "Formula Recognition:",
@@ -542,12 +559,13 @@ settings: dict[str, Any] = {
             },
         },
         "default": {
+            #pdf解析的配置
             "pdf": {
                 "provider": "pymupdf"
                 # "provider":"pdf_oxide"
             },
-            "pdf2": {"provider": "pymupdf"},
-            "image": {"ocr": "ocr", "llm": "llm"},
+            #图片解析的配置
+            "image": {},
         },
     },
     "pdf_service": {
@@ -555,7 +573,7 @@ settings: dict[str, Any] = {
         # {data_dir}/tasks,{data_dir}/errors,{data_dir}/files
         "data_dir": "./data/pdf",
         # all:保留所有文件，放在：data_dir/files
-        # error:保留解析错误的，放在 data_dir/files
+        # error:保留解析错误的，放在 data_dir/errors
         # no:不保留文件
         "keep_file_policy": "error",
         "image": {

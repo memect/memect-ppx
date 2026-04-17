@@ -27,7 +27,7 @@ def access_filter_factory(prefix:str):
     return access_filter
 
 def get_log_level()->str:
-    return os.environ.get('MEMECT_LOG_LEVEL','INFO').upper()
+    return os.environ.get('PPX_LOG_LEVEL','INFO').upper()
 
 settings:Final[dict[str,Any]] = {
     'version': 1,
@@ -76,7 +76,7 @@ settings:Final[dict[str,Any]] = {
             #'class':'logging.handlers.ConcurrentRotatingFileHandler',
             'formatter': 'default',
             #相对程序所在目录
-            'filename': './logs/all.log',
+            'filename': './logs/ppx.log',
             # 'level':'ERROR',
             'filters':['remove_poll'],
             'maxBytes': 1024 * 1024,
