@@ -26,7 +26,7 @@ benchmark and evaluation tooling used for PPX benchmarking.
   review the upstream dataset terms and copyright statement before any
   commercial redistribution or marketing use.
 
-## OmniDocBench V1.6
+## OmniDocBench 0410
 
 | Method | Model Type | Size | Overall | TextEdit | FormulaCDM | TableTEDS | TableTEDS-S | Read OrderEdit |
 | ------ | ---------- | ---- | ------: | -------: | ---------: | --------: | ----------: | -------------: |

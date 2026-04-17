@@ -1,19 +1,19 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Final, Sequence
+from typing import Callable, Final, Sequence
 
 from memect.base.bbox import BBox
-from memect.pdf.base import KDocument, KPage, KTable, TableMode, VObject
-from memect.pdf.model import ModelExecutor
+from memect.pdf.base import KDocument, KPage, TableMode, VObject
+from memect.pdf.model import ModelManager
 
 
 class TableParser:
-    def __init__(self):
+    def __init__(self,manager:ModelManager):
         super().__init__()
-        self._table_cls: Final = ModelExecutor.get("table_cls")
+        self._table_cls: Final = manager.get("table_cls")
         self._table_cls_key: Final = "cache/default/table_cls"
-        self._table_det: Final = ModelExecutor.get("table_det")
+        self._table_det: Final = manager.get("table_det")
         self._table_det_key: Final = "cache/default/table_det"
-        self._table_llm = ModelExecutor.get("table_llm")
+        self._table_llm = manager.get("table_llm")
         self._table_llm_key: Final = "cache/default/table_llm"
 
     def _do(

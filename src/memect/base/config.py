@@ -5,14 +5,16 @@ import logging.config
 import os
 import re
 import signal
+import threading
 import tomllib
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final, Iterable, cast
+from typing import Any, Final,cast
 
 
 def load_py(filename: str | Path, *, name: str | None = None) -> ModuleType:
+    """载入py文件"""
     filename = Path(filename)
     spec = importlib.util.spec_from_file_location(name or filename.stem, filename)
     if spec is None:
@@ -24,7 +26,7 @@ def load_py(filename: str | Path, *, name: str | None = None) -> ModuleType:
     return m
 
 
-def load_data(filename: str | Path, *, py_name: str = "data") -> dict[str, Any]:
+def load_data(filename: str | Path, *, py_name: str = "settings") -> dict[str, Any]:
     filename = Path(filename)
     suffix: str = filename.suffix
     if suffix == ".json":
@@ -41,70 +43,27 @@ def load_data(filename: str | Path, *, py_name: str = "data") -> dict[str, Any]:
         raise ValueError(f"不支持的文件格式:{filename}")
 
 
-def load_settings(
-    paths: str | Path | Sequence[str | Path],
-    *,
-    custom_settings: Mapping[str, Any] | None = None,
-    py_name: str = "settings",
-    path_names: Sequence[str] | None = None,
-    verbose: bool = False,
-) -> dict[str, Any]:
-    """载入配置，按顺序查找，返回第一个找到的，支持py，json，toml，yaml格式"""
-    if isinstance(paths, (str, Path)):
-        paths = [paths]
-
-    for path in paths:
-        path = Path(path)
-        # path = get_path(path)
-        if path.is_file():
-            if verbose:
-                from .utils import console
-
-                console.log(f"load settings file={path.name}")
-            data = _load_settings(path, py_name=py_name)
-            if custom_settings:
-                set_values(data, custom_settings)
-
-            # 调整路径属性，如果是相对路径，相对配置文件所在的目录，绝对路径不改变
-            if path_names:
-
-                def adjust_value(value: Any, cwd: Path | None = None) -> Any:
-                    if isinstance(value, (str, Path)):
-                        return get_path(value, cwd=cwd)
-                    elif isinstance(value, Sequence):
-                        return [get_path(a, cwd=cwd) for a in value]  # type: ignore
-                    else:
-                        return value
-
-                for pn in path_names:
-                    set_value(
-                        data,
-                        pn,
-                        fn=lambda old, _: adjust_value(old, cwd=path.parent),
-                        force=False,
-                    )
-
-            return data
-    raise ValueError(f"没有一个路径存在:{paths}")
-
-
-def _load_settings2(default_file:str|Path,custom_settings:Mapping[str,Any]|None=None)->Any:
+def _load_settings(default_file:str|Path,custom_settings:Mapping[str,Any]|None=None,custom_dir:Path=Path('./conf'))->Any:
     """先读取默认配置，然后再合并自定义配置，再合并来自命令行的配置"""
+    from .utils import console
     default_file = Path(default_file)
     name = default_file.name.split('.')[0]
     data = load_data(default_file,py_name='settings')
-    custom_file=Path(f'./conf/{name}.py')
-    for custom_file in [Path(f'./conf/{name}.py'),Path(f'./conf/{name}.json')]:
+    for custom_file in [custom_dir.joinpath(f'{name}.py'),custom_dir.joinpath(f'{name}.json')]:
         if custom_file.is_file():
-            set_values(data,load_data(custom_file,py_name='settings'))
+            console.log(f'load custom config:{custom_file}')
+            _set_values(data,load_data(custom_file,py_name='settings'))
             break
-    
+
+    #环境变量的设置，目前不支持，因为太多容易混乱，通过上面的自定义文件，或者命令行传递就可以解决
+
+    #命令行的设置
     if custom_settings:
-        set_values(data,custom_settings)
+        _set_values(data,custom_settings)
     return data
 
 
-def set_values(
+def _set_values(
     data: MutableMapping[str, Any],
     values: Mapping[str, Any] | Sequence[tuple[str, Any]] | None,
     *,
@@ -120,12 +79,12 @@ def set_values(
 
     for k, v in items:
         if fn is not None:
-            set_value(data, k, fn=fn, force=force)
+            _set_value(data, k, fn=fn, force=force)
         else:
-            set_value(data, k, value=v, force=force)
+            _set_value(data, k, value=v, force=force)
 
 
-def set_value(
+def _set_value(
     data: MutableMapping[str, Any],
     key: str,
     *,
@@ -169,69 +128,6 @@ def set_value(
         # TODO 表示删除？
         if obj[name] is ...:
             del obj[name]
-
-
-def _load_settings(
-    filename: str | Path, *, py_name: str = "settings"
-) -> dict[str, Any]:
-    filename = Path(filename)
-    data: dict[str, Any] = load_data(filename, py_name=py_name)
-    template_path: str | Path | None = data.pop("$extend", None)
-    sets: dict[str, Any] | None = data.pop("$set", None)
-    template: dict[str, Any] = {}
-    if template_path:
-        template_path = get_path(template_path, cwd=filename.parent)
-        if not template_path.is_file():
-            raise ValueError(f"模版文件不存在:{template_path}")
-        template = _load_settings(template_path)
-        # 仅仅设置模版
-        set_values(template, sets)
-    template.update(data)
-    return template
-
-
-def get_path(
-    path: str | Path,
-    *,
-    cwd: str | Path | None = None,
-    schemes: Mapping[str, str | Path] | None = None,
-) -> Path:
-    # app://a/b/c.txt
-    if cwd is None:
-        cwd = Path.cwd()
-    else:
-        cwd = Path(cwd)
-
-    new_schemes: dict[str, Path] = {}
-    new_schemes["app"] = Path(".").resolve()
-    new_schemes["project"] = Path(".").resolve()
-    if schemes:
-        for k, v in schemes.items():
-            new_schemes[k] = Path(v)
-
-    scheme_names = "|".join([re.escape(v) for v in new_schemes.keys()])
-
-    path = str(path)
-    m = re.fullmatch(rf"(?P<scheme>{scheme_names})[:]//(?P<path>.+)", path)
-    if m is not None:
-        scheme = m.groupdict()["scheme"]
-        path = m.groupdict()["path"]
-        p = new_schemes[scheme].joinpath(path).absolute()
-    else:
-        # 如果不是app://，path可以为绝对路径或者相对路径
-        p = cwd.joinpath(path).absolute()
-
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def get_paths(
-    paths: Iterable[str | Path],
-    *,
-    cwd: str | Path | None = None,
-    schemes: Mapping[str, str | Path] | None = None,
-) -> list[Path]:
-    return [get_path(path, cwd=cwd, schemes=schemes) for path in paths]
 
 
 class _KV:
@@ -281,7 +177,7 @@ class _KV:
 
 def parse_kvs(items: Sequence[str] | None) -> dict[str, Any]:
     """
-    解析：['a.b=1','a.c=2'] => {'a.b':1,'a.c':2}
+    解析：['a.b=1','a.c=2'] => {'a.b':1,'a.c':2,'a."xy".c'}
     """
     if not items:
         return {}
@@ -300,45 +196,52 @@ _state: Final[dict[str, Any]] = {
     "env_prefix": None,
     "settings": {},
 }
+_lock:Final=threading.RLock()
 
 
 def setup(
     settings: Mapping[str, Any] | None = None,
     log_settings: Mapping[str, Any] | None = None,
-    env_prefix: str | None = None,
+    conf_dir:str|Path=Path('./conf'),
+    use_log:bool=True
 ):
+    """设置初始化，如果已经初始化，不再执行，所以如果需要应用一些自定义的设置，必须先执行"""
     from .utils import console
 
-    if _state["done"]:
-        return
-    # 同时可以获得环境变量？如：
-    # pdf2md_server_port=xxxx
-    # pdf2md_server_host=xxxx
-    if not env_prefix:
-        # 使用当前项目的名字？
-        env_prefix = f"memect_{Path('.').absolute().name}"
+    with _lock:
+        if _state["done"]:
+            return
+        
+        conf_dir = Path(conf_dir).resolve()
 
-    console.log("config setup")
-    console.rule("config setup")
-    console.log(f"pid={os.getpid()}")
-    console.log(f"cwd={os.path.abspath('.')}")
-    console.log(f"env_prefix={env_prefix}")
-    console.log(f"custom_settings={settings}")
-    console.log(f"custom_log_settings={log_settings}")
+        #console.log("config setup")
+        console.rule("start setup config")
+        console.log(f"pid={os.getpid()}")
+        console.log(f"cwd={os.path.abspath('.')}")
+        console.log(f'use_log={use_log}')
+        #console.log(f"env_prefix={env_prefix}")
+        console.log(f"custom_settings={settings}")
+        console.log(f"custom_log_settings={log_settings}")
+        console.log(f'custom_dir={conf_dir}')
 
-    # 然后获得环境变量，然后设置？
-    _state["done"] = True
-    #TODO
-    import memect.conf
-    conf_dir = Path(memect.conf.__file__).parent
-    _state["settings"] = _load_settings2(conf_dir/"settings.default.py", custom_settings=settings)
-    # 设置日志
-    log_cfg = _load_settings2(conf_dir/ "log.default.py", custom_settings=log_settings)
-    logging.config.dictConfig(log_cfg)
+        # 然后获得环境变量，然后设置？
+        _state["done"] = True
+        #TODO
+        import memect.conf
+        default_conf_dir = Path(memect.conf.__file__).parent
+        _state["settings"] = _load_settings(default_conf_dir/"settings.default.py", custom_settings=settings,custom_dir=conf_dir)
+        # 设置日志
+        if use_log:
+            log_cfg = _load_settings(default_conf_dir/ "log.default.py", custom_settings=log_settings,custom_dir=conf_dir)
+            logging.config.dictConfig(log_cfg)
+        
+        console.rule('end setup config')
 
 
 
 def get_settings(name: str | None = None) -> Mapping[str, Any]:
+    """获得设置，如果还没有载入设置，自动载入"""
+    setup()
     if not _state["done"]:
         raise RuntimeError("还没有执行过setup()")
     if not name:
@@ -362,9 +265,10 @@ class MPInit:
 
     def __init__(self, use_log: bool = True):
         super().__init__()
+        #确保先初始化
+        setup()
         global _state
-
-        self._env_prefix = _state["env_prefix"]
+        #self._env_prefix = _state["env_prefix"]
         self._custom_settings = _state["custom_settings"]
         self._custom_log_settings = _state["custom_log_settings"]
         self._use_log = use_log
@@ -379,7 +283,7 @@ class MPInit:
         setup(
             self._custom_settings,
             self._custom_log_settings,
-            env_prefix=self._env_prefix,
+            use_log=self._use_log
         )
         # 忽略ctrl+c，等待主进程关闭释放
         signal.signal(signal.SIGINT, signal.SIG_IGN)

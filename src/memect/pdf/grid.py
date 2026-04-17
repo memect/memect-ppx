@@ -8,6 +8,7 @@ from typing import Any, BinaryIO, Final, Protocol, Self, Sequence, TextIO, overl
 
 from PIL import Image, ImageDraw
 
+from memect.base import lists
 from memect.base.bbox import BBox
 from memect.base.debug import XDebugger
 
@@ -35,7 +36,7 @@ class Cell:
         self.col_index = col_index
         self.row_span = row_span
         self.col_span = col_span
-        self.objects: Sequence[Any] = tuple(objects) if objects else ()
+        self.objects: list[Any] = list(objects) if objects else []
 
     def jsonify(self) -> dict[str, Any]:
         return {
@@ -322,7 +323,7 @@ class BaseGrid(ABC):
                 # 如果不使用remove而是get，2000*2000=4百万，耗时18秒，每4.5秒执行100万次
                 # cell.objects = cell.bbox.adjust(dx=2,dy=2).remove(items)
                 if items:
-                    cell.objects = get_objects(cell.bbox.expand(dx=1, dy=1), items,ratio=ratio)
+                    cell.objects.extend(get_objects(cell.bbox.expand(dx=1, dy=1), items,ratio=ratio))
                 else:
                     break
         
@@ -331,17 +332,24 @@ class BaseGrid(ABC):
         if len(items) > 0:
             # 如果是跨页表格合并，不应该执行到这里，因为使用的是cell的bbox，已经调整了bbox
             # 所以，这里处理的都是单页的表格，单元格的数量不会太多，速度很快
+            #TODO 有些可能是靠近边界的空格，可以去掉的，怎么知道是空格？
+            from .base import KChar
+            space_items:list[Any]=[]
+            for item in items:
+                if isinstance(item,KChar) and item.text.isspace():
+                    space_items.append(item)
+
             self._logger.warning(
-                "有items没有被填充到表格，total=%s,remain=%s", total, len(items)
+                "有items没有被填充到表格，total=%s,remain=%s,spaces=%s", total, len(items),len(space_items)
             )
+
+            lists.remove(items,space_items,use_is=True)
 
             if debugger.allow("info"):
                 with debugger.group("items"):
                     for i, item in enumerate(items):
                         debugger.console.print(i, item.bbox)
             
-
-
             # 一般就1-2个会溢出
             for item in items:
                 # 主要考虑左右溢出的情况，如：
@@ -374,7 +382,7 @@ class BaseGrid(ABC):
                     overlapped_cells.sort(key=lambda obj: obj[0], reverse=True)
                     _, cell = overlapped_cells[0]
                     # 需要只是有一半距离才算？否则抛弃掉？
-                    cell.objects = tuple([*cell.objects, item])
+                    cell.objects.append(item)
                     self._logger.warning(
                         "overflow item ,cell.bbox=%s,item.bbox=%s",
                         cell.bbox,

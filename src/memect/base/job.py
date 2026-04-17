@@ -118,13 +118,13 @@ class Scheduler[T1,T2]:
         self._policy:Final=policy
         self._handler:Final=handler
         self._lock:Final= threading.RLock()
-        self._task_executor:Final = ThreadPoolExecutor(self._max_task_size,thread_name_prefix=f'{name}_task_')
+        self._task_executor:Final = ThreadPoolExecutor(self._max_task_size,thread_name_prefix=f'{name}_task')
         """执行job的task"""
 
         #execute2需要的变量
         self._running_tasks: Final[list[Future[Any]]] = []
         self._jobs: Final[list[Job[T1,T2]]] = []
-        self._job_executor:Final = ThreadPoolExecutor(self._max_task_size,thread_name_prefix=f'{name}_job_')
+        self._job_executor:Final = ThreadPoolExecutor(self._max_task_size,thread_name_prefix=f'{name}_job')
         """执行job"""
 
         if auto_close:
@@ -392,7 +392,7 @@ class Scheduler[T1,T2]:
 
     @classmethod
     def _close(cls,name:str,object_id:int,*executors:Executor):
-        cls._logger.info('close name=%s,object_id=%s',name,object_id)
+        cls._logger.debug('close name=%s,object_id=%s',name,object_id)
         for executor in executors:
-            executor.shutdown(cancel_futures=True,wait=False)
+            executor.shutdown(cancel_futures=True,wait=True)
 

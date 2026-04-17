@@ -60,10 +60,7 @@ class App:
             return
         self._inited = True
         self._logger.info("start init app...")
-        #为了减少配置的层次，这里把pdf_parser提升了一级，所以需要合并
-        pdf_args = dict(self._settings["pdf_service"])
-        pdf_args['parser']=self._settings['pdf_parser']
-        self._pdf_service = PdfService(pdf_args)
+        self._pdf_service = PdfService(self._settings['pdf_service'])
         self._fastapi = self._create_fastapi([self._pdf_service])
         self._logger.info("end init app,elapsed=%.3f", self._timer.elapsed())
 
@@ -301,6 +298,5 @@ class App:
 
 async def create_app():
     from memect.base.config import setup
-
     setup()
     return App()

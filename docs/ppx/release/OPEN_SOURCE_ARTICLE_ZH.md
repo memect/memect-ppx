@@ -162,8 +162,8 @@ ppx parse report.pdf --pages "1-5,10,15-20"
 ## 项目入口
 
 - GitHub: <https://github.com/memect/memect-ppx>
-- pdf2x产品站: <https://pdf2x.cn/>
-- ![pdf2x 小程序码](../images/pdf2x.jpg)
+- 产品站: <https://pdf2x.cn/>
+- 小程序: `#小程序://PDF2x/fXZ4o2YV4BwU7Vg`
 
 如果希望快速体验，可以直接使用产品站或小程序；如果希望本地部署、二次开发或集成到自己的系统中，可以使用开源仓库和 PyPI 包。
 
@@ -197,3 +197,4 @@ ppx parse report.pdf --pages "1-5,10,15-20"
 - 分享真实使用场景和效果反馈
 
 我们希望 PPX 不只是一个能跑起来的工具，而是一个能够在真实文档场景中长期生长、持续演进的开源项目。
+

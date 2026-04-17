@@ -198,70 +198,22 @@ ppx parse report.pdf --backend deepseek
 
 ## Use from python
 
-PPX 可直接作为库使用。`Parser` 设计为一次初始化、多次复用。
-
-### 基础用法
+PPX 可直接作为库使用。`Parser` 设计为多次调用时全局只需要一个对象。
 
 ```python
-from memect.pdf.base import KDocument, ParseParams
 from memect.pdf.parser import Parser
+from memect.pdf.base import KDocument, KDocumentFactory
 
-parser = Parser()  # 初始化一次，跨调用复用
+# 如果需要多次使用，全局只需要一个对象
+# 如果没有传递参数，使用默认的设置
+with Parser() as parser:
+    doc = KDocument("/path/your.pdf")
+    parser.parse(doc)
 
-doc = KDocument("report.pdf", params=ParseParams())
-parser.parse(doc)
-
-print(doc.markdown())   # 完整文档的 Markdown 字符串
-data = doc.jsonify()    # 完整文档的 dict（页面 → 带坐标的对象）
-```
-
-### 自定义输出目录
-
-```python
-doc = KDocument("report.pdf", out_dir="/tmp/out", params=ParseParams())
-parser.parse(doc)
-# 结果写入 /tmp/out/doc.md 和 /tmp/out/doc.json
-```
-
-### 选择后端和 OCR 模式
-
-```python
-from memect.pdf.base import Backend, OCRMode
-
-params = ParseParams(
-    backend=Backend.DEEPSEEK,
-    ocr=OCRMode.AUTO,
-    remove_watermark=True,
-)
-doc = KDocument("report.pdf", params=params)
-parser.parse(doc)
-```
-
-### 解析指定页面
-
-```python
-params = ParseParams(pagenos=[1, 2, 5])   # 1-based 页码
-doc = KDocument("report.pdf", params=params)
-parser.parse(doc)
-```
-
-### 配置 DeepSeek 后端
-
-```python
-from memect.pdf.parser import Parser, ParserArgs
-
-args = ParserArgs.create({
-    "deepseek": {
-        "base_url": "http://127.0.0.1:4000/v1",
-        "model": "deepseek-ocr-2",
-        "api_key": "",
-    }
-})
-parser = Parser(args)
-
-params = ParseParams(backend=Backend.DEEPSEEK)
-doc = KDocument("report.pdf", params=params)
-parser.parse(doc)
+# 多进程批量，使用默认的设置
+doc = KDocumentFactory("/path/your.pdf", params=None)
+docs = [doc]
+Parser.batch(docs, max_workers=1)
 ```
 
 ---
@@ -473,3 +425,9 @@ PPX 基于 [GNU Lesser General Public License v3.0 (LGPL-3.0)](LICENSE) 开源�
 LGPL-3.0 允许将本库链接到你的应用中（包括商业应用），无需开放你自己的代码。对 PPX 自身代码的修改须以相同协议共享。
 
 对于仓库内随附的第三方代码与资源，请同时参阅 [NOTICE](NOTICE) 和 [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md)。这两个文件用于说明仓库内 vendored 组件、打包资源的归属信息和发布前的再分发核查事项。
+
+产品站: <https://pdf2x.cn/>
+
+小程序码：
+
+![pdf2x 小程序码](docs/images/pdf2x.jpg)

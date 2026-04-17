@@ -2,6 +2,8 @@
 import importlib
 import os
 from pathlib import Path
+import threading
+from typing import Final
 
 
 def get_nvidia_lib_paths() -> list[str]:
@@ -42,14 +44,21 @@ def get_nvidia_lib_paths() -> list[str]:
 
     return [str(p.resolve()) for p in paths if p.is_dir()]
 
+
+_lock:Final=threading.Lock()
+_done=False
 def set_to_env():
     """设置nvidia的库路径到LD_LIBRARY_PATH"""
-    old_path = os.environ.get('LD_LIBRARY_PATH')
-    path:str=os.pathsep.join(get_nvidia_lib_paths())
-    if old_path:
-        path=f'{path}{os.path.sep}{old_path}'
-    os.environ['LD_LIBRARY_PATH']=path
-    #print(f'LD_LIBRARY_PATH={path}')
+    global _done
+    with _lock:
+        if not _done:
+            _done=True
+            old_path = os.environ.get('LD_LIBRARY_PATH')
+            path:str=os.pathsep.join(get_nvidia_lib_paths())
+            if old_path:
+                path=f'{path}{os.path.pathsep}{old_path}'
+            os.environ['LD_LIBRARY_PATH']=path
+            #print(f'LD_LIBRARY_PATH={path}')
 
 if __name__ == "__main__":
     paths = get_nvidia_lib_paths()

@@ -199,70 +199,22 @@ ppx parse report.pdf --backend deepseek
 
 ## Use from python
 
-PPX can be used directly as a library. `Parser` is designed to be instantiated once and reused.
-
-### Basic usage
+PPX can be used directly as a library. If you call it repeatedly, a single global `Parser` instance is usually enough.
 
 ```python
-from memect.pdf.base import KDocument, ParseParams
 from memect.pdf.parser import Parser
+from memect.pdf.base import KDocument, KDocumentFactory
 
-parser = Parser()  # initialise once, reuse across calls
+# If you call it repeatedly, a single global parser is usually enough.
+# If no arguments are passed, the default settings are used.
+with Parser() as parser:
+    doc = KDocument("/path/your.pdf")
+    parser.parse(doc)
 
-doc = KDocument("report.pdf", params=ParseParams())
-parser.parse(doc)
-
-print(doc.markdown())   # full document as Markdown string
-data = doc.jsonify()    # full document as dict (pages → objects with coordinates)
-```
-
-### Custom output directory
-
-```python
-doc = KDocument("report.pdf", out_dir="/tmp/out", params=ParseParams())
-parser.parse(doc)
-# results written to /tmp/out/doc.md and /tmp/out/doc.json
-```
-
-### Select backend and OCR mode
-
-```python
-from memect.pdf.base import Backend, OCRMode
-
-params = ParseParams(
-    backend=Backend.DEEPSEEK,
-    ocr=OCRMode.AUTO,
-    remove_watermark=True,
-)
-doc = KDocument("report.pdf", params=params)
-parser.parse(doc)
-```
-
-### Parse specific pages
-
-```python
-params = ParseParams(pagenos=[1, 2, 5])   # 1-based page numbers
-doc = KDocument("report.pdf", params=params)
-parser.parse(doc)
-```
-
-### Configure the DeepSeek backend
-
-```python
-from memect.pdf.parser import Parser, ParserArgs
-
-args = ParserArgs.create({
-    "deepseek": {
-        "base_url": "http://127.0.0.1:4000/v1",
-        "model": "deepseek-ocr-2",
-        "api_key": "",
-    }
-})
-parser = Parser(args)
-
-params = ParseParams(backend=Backend.DEEPSEEK)
-doc = KDocument("report.pdf", params=params)
-parser.parse(doc)
+# Batch parsing with multiprocessing and default settings.
+doc = KDocumentFactory("/path/your.pdf", params=None)
+docs = [doc]
+Parser.batch(docs, max_workers=1)
 ```
 
 ---
@@ -474,3 +426,9 @@ PPX is released under the [GNU Lesser General Public License v3.0 (LGPL-3.0)](LI
 LGPL-3.0 allows you to link this library into your applications — including commercial ones — without relicensing your own code. Modifications to PPX itself must be shared under the same license.
 
 For bundled third-party code and assets, see [NOTICE](NOTICE) and [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md). Those files document attribution and redistribution review items for vendored components and bundled resources shipped with this repository.
+
+Product site: <https://pdf2x.cn/>
+
+Mini Program code:
+
+![pdf2x Mini Program code](docs/images/pdf2x.jpg)
