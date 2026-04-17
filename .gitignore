@@ -21,7 +21,6 @@
 !/THIRD_PARTY_LICENSES.md
 !/NOTICE
 
-
 **/.DS_Store
 **/__pycache__/**
 /src/**/*.c
@@ -31,7 +30,4 @@
 
 !/docker-compose.yaml
 !/.env.sample
-
-docs/OPEN_SOURCE_CHECKLIST.md
-docs/TECh.md
 

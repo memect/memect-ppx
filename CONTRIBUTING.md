@@ -18,7 +18,7 @@ Thank you for your interest in PPX! We welcome contributions of all kinds — co
 
 Before opening an issue, please:
 
-1. Check the [README](./README.md) and existing [Issues](https://github.com/memect-hq/ppx/issues) to avoid duplicates
+1. Check the [README](./README.md) and existing [Issues](https://github.com/memect/memect-ppx/issues) to avoid duplicates
 2. Confirm the problem is reproducible on the latest version
 
 **Bug reports** should include:
@@ -46,8 +46,8 @@ Before opening an issue, please:
 
 ```bash
 # 1. Fork this repo, then clone your fork
-git clone https://github.com/<your-username>/ppx.git
-cd ppx
+git clone https://github.com/<your-username>/memect-ppx.git
+cd memect-ppx
 
 # 2. Install dependencies
 uv sync
@@ -59,30 +59,27 @@ git checkout -b fix/issue-123
 
 # 4. Make your changes
 
-# 5. Run linting
-uv run ruff check src/
-uv run ruff format --check src/
-
-# 6. Push and open a Pull Request against main
+# 5. Push and open a Pull Request against main
 git push origin feat/my-feature
 ```
 
-### Testing
+### Validation
 
 Before submitting a PR, make sure your changes:
 
-- Do not break existing functionality (run `ppx parse` on a typical PDF to verify)
-- Include test cases or examples for any new functionality
-- If new parsing logic is involved, consider adding an output sample under `output/`
+- Do not obviously break existing functionality
+- Include usage notes, examples, or reproduction steps when they help reviewers understand the change
+- If your change affects parsing behavior, describe the input type and expected output clearly in the PR
+- Do not submit customer documents, internal documents, or files without redistribution rights
 
 ---
 
 ## Code Style
 
-- **Formatter / linter**: [Ruff](https://docs.astral.sh/ruff/) — run it before committing
 - **Comments**: Match the language already used in each file
 - **Focused PRs**: Keep each PR to a single goal; avoid mixing unrelated changes
 - **YAGNI**: Only implement what is needed now — avoid over-engineering
+- **Examples and samples**: Only contribute files that are safe to redistribute publicly
 
 ---
 
@@ -124,7 +121,6 @@ I have read and agree to the PPX Contributor License Agreement.
 
 ## Pull Request Review
 
-- Maintainers will respond within **5 business days**
 - Keep your branch up to date with `main` to avoid merge conflicts
 - After addressing review feedback, leave a brief comment explaining your changes
 
