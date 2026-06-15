@@ -4,6 +4,7 @@ import math
 import random
 import re
 import threading
+import typing
 import uuid
 import weakref
 from collections.abc import Sequence
@@ -35,11 +36,13 @@ from memect.base.bbox import BBox, Point, Quad
 from memect.base.matrix import Matrix
 from memect.base.strs import NText
 from memect.base.utils import AutoCleaner, MyBaseModel, safe_write
-from memect.pdf import chars
 from memect.pdf.grid import Grid
 from memect.base.zip import Archiver
 from memect.pdf.sort import Sorter
 
+
+if typing.TYPE_CHECKING:
+    from .model import ModelManager
 
 class PageParams(MyBaseModel):
     number: int = 1
@@ -168,6 +171,8 @@ class ApiParams(MyBaseModel):
     """deepseek,paddle,glm,default"""
 
     ocr: OCRMode = OCRMode.AUTO
+
+    features:list[str]=Field(default_factory=list)
 
 
 class ParseParams(ApiParams):
@@ -393,6 +398,20 @@ class KDocument:
         self.tree: XTree | None = None
         """章节树解析的结果"""
 
+        #from .model import ModelManager
+        self._model_manager=None
+    
+    @property
+    def model_manager(self)->'ModelManager|None':
+        if self._model_manager is not None:
+            return self._model_manager()
+        else:
+            return None
+    
+    @model_manager.setter
+    def manager(self,m:'ModelManager'):
+        self._model_manager = weakref.ref(m)
+    
     def __del__(self):
         # self._logger.debug("gc %s", self)
         pass
@@ -1005,7 +1024,7 @@ class KPage:
             img.save(fullpath)
         return img
 
-    def make_figure(self, quad: Quad | BBox, *, add: bool = False) -> "KFigure|None":
+    def make_figure(self, quad: Quad | BBox, *, add: bool = False,clear:bool=False) -> "KFigure|None":
         img = self.crop(quad)
         if img is None:
             return None
@@ -1014,12 +1033,16 @@ class KPage:
         figure = KFigure(self, quad, filename=filename)
         figure.fullpath.parent.mkdir(parents=True, exist_ok=True)
         img.save(figure.fullpath)
+
+        if clear:
+            figure.bbox.get(self.objects,ratio=0.8,remove=True)
+
         if add:
             self.objects.append(figure)
         return figure
 
     def make_formula(
-        self, quad: Quad, *, add: bool = False, inline: bool = False, latex: str = ""
+        self, quad: Quad|BBox, *, add: bool = False,clear:bool=False,inline: bool = False, latex: str = ""
     ):
         figure = self.make_figure(quad)
         if figure is None:
@@ -1027,9 +1050,23 @@ class KPage:
         formula = KFormula(
             self, quad, inline=inline, latex=latex, filename=figure.filename
         )
+        if clear:
+            formula.bbox.get(self.objects,ratio=0.8,remove=True)
         if add:
             self.objects.append(formula)
         return formula
+    
+    def make_table(self,quad:Quad|BBox,*,use_vobj:bool=False,add:bool=False,clear:bool=False,name:str='custom',index:int=0):
+        """创建一个表格"""
+        if isinstance(quad,Quad):
+            bbox=quad.bbox
+        else:
+            bbox=quad
+        from memect.pdf.default.table.wbk import Parser
+        #TODO 目前还是需要使用模型来获得结构，后续不使用模型了，直接根据规则解析？
+        manager = self.doc.model_manager
+        assert manager is not None
+        return Parser(manager).parse_one(self,bbox,use_vobj=use_vobj,add=add,clear=clear,name=name,index=index)
 
     def load_layout(self, data: Any, clear: bool = True):
         """
@@ -2690,6 +2727,10 @@ class KFigure(KObject):
         }
 
 
+class TableIntent(StrEnum):
+    DATA=auto()
+    LAYOUT=auto()
+
 class KTable(KObject):
     type: str = "table"
 
@@ -2730,6 +2771,9 @@ class KTable(KObject):
         """合并或者其他操作可以设置临时状态"""
 
         self.grid = self._create_grid()
+
+        self.intent:TableIntent = TableIntent.DATA
+        """表示该表格的用途，如：layout"""
 
     def _create_grid(self):
         # TODO 如果需要快速的访问，建立一个n*m的grid
@@ -3587,7 +3631,7 @@ class KFormula(KObject):
     def __init__(
         self,
         page: KPage,
-        quad: Quad,
+        quad: Quad|BBox,
         *,
         inline: bool = False,
         latex: str = "",

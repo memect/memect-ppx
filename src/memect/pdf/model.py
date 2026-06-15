@@ -683,6 +683,193 @@ class RapidOCRModel(Model):
 
         return np.array([[x1,y1],[x2,y1],[x2,y2],[x1,y2]], dtype=np.float32)
 
+class OCRModel(Model):
+    _logger = logging.getLogger(f'{__module__}.{__qualname__}')
+    def __init__(self,**kwargs:Any):
+        super().__init__()
+        self._model_kwargs = kwargs
+        self._model:Any = None
+    def _execute(self, files: Sequence[FileInfo]):
+        from .ocr import PPOCRv6OCR
+        from memect.models import get_ocr_path
+        det_score_threshold = self._model_kwargs.get('det_score_threshold')
+        with self._lock:
+            if self._model is None:
+                timer = Timer.start()
+                #tiny,small,medium
+                model_size = self._model_kwargs.get('model','small')
+                params:dict[str,Any]={
+                    'det_model_path': self._model_kwargs.get('det_model_path') or get_ocr_path('det',model_size),
+                    'rec_model_path': self._model_kwargs.get('rec_model_path') or get_ocr_path('rec',model_size),
+                    "use_cuda": self._model_kwargs.get('use_cuda'),
+                    'use_cann':self._model_kwargs.get('use_cann'),
+                    'use_dml':self._model_kwargs.get('use_dml'),
+                    'engine':self._model_kwargs.get('engine')
+                }
+                self._model = PPOCRv6OCR(**params)
+                self._logger.info('load ocr model,elapsed=%.3f',timer.elapsed())
+
+        
+        def to_point(p: Any) -> Any:
+            return (float(p[0]), float(p[1]))
+
+        def to_quad(box: Any) -> Any:
+            p1, p2, p3, p4 = box
+            return (to_point(p1), to_point(p2), to_point(p3), to_point(p4))
+        
+        def adjust_boxes(boxes:list[Any], x_overlap_ratio: float = 0.7,min_overlap_y:float=1) -> Any:
+            if len(boxes) < 2:
+                return boxes
+            result = [b.copy() for b in boxes]
+            for i in range(len(result)):
+                for j in range(i + 1, len(result)):
+                    a, b = result[i], result[j]
+                    # 确定上下关系
+                    if a[:, 1].mean() > b[:, 1].mean():
+                        a, b = b, a
+                    # x 相交比例
+                    x_inter = min(a[:, 0].max(), b[:, 0].max()) - max(a[:, 0].min(), b[:, 0].min())
+                    min_w = min(a[:, 0].max() - a[:, 0].min(), b[:, 0].max() - b[:, 0].min())
+                    if min_w <= 0 or x_inter / min_w < x_overlap_ratio:
+                        continue
+                    # y 方向相交
+                    a_bottom, b_top = a[:, 1].max(), b[:, 1].min()
+                    if a_bottom-b_top<min_overlap_y:
+                        continue
+                    mid = (a_bottom + b_top) / 2
+                    if mid-1 <= a[:, 1].min() or mid+1 >= b[:, 1].max():
+                        continue
+                    a[np.argsort(a[:, 1])[-2:], 1] = mid-1
+                    b[np.argsort(b[:, 1])[:2], 1] = mid+1
+            return result
+
+
+        model:PPOCRv6OCR=self._model
+        use_preferred_bbox=True
+        results: list[Any] = []
+        for file in files:
+            # 这个模型的其他参数，None表示不设置，使用配置的值
+            # 但是，如果设置了一次，就会直接改变配置的值，所以，要么都不设置，要么每次都设置
+
+            # 代码是支持PIL.Image.Image，但是接口的类型注释没有
+
+            #TODO 对于超长或者超宽的图片，需要分成多个图片进行识别   
+            cv2_img = file.cv2_image
+            output = model.predict(cv2_img,det_score_threshold=det_score_threshold)            
+            objs: list[Any] = []
+            size = file.size
+            # height = size[1]
+            if output:
+                boxes:list[Any]=[np.array(item['box']) for item in output]
+                txts:list[Any]=[item['text'] for item in output]
+                scores:list[Any]=[item['rec_score'] for item in output]
+                if use_preferred_bbox:
+                    boxes = adjust_boxes(boxes)
+                else:
+                    pass
+                for box,score,text in zip(boxes,scores,txts):
+                    #返回的box是unclip后的结果，扩大了一些
+                    #to_quad(box)
+                    #to_quad2(box) 稍微内收了一点
+                    if use_preferred_bbox:
+                        box = self._shrink_bbox_any_bg(cv2_img,box)                    
+                    #TODO 有些情况，会把2行文字识别为一个box，而且没有识别全部字
+                    #这种情况下，如下：被识别为一个box，而且仅仅返回“AB”，或者“ABC”，或者“ABCD”，导致字符的宽度/高度计算错误
+                    #AB
+                    #CD
+
+                    if text and score>0:
+                        obj = {
+                            "text": text,
+                            # 原点为左上角
+                            "quad": to_quad(box),
+                            "score": round(score, 2),
+                        }
+                        objs.append(obj)
+                    else:
+                        pass
+            else:
+                pass
+            results.append({"spans": objs, "width": size[0], "height": size[1]})
+        return results
+
+
+    def _shrink_bbox_any_bg(
+        self,
+        image: np.ndarray,
+        bbox: np.ndarray,
+        padding: int = 1,
+    ) -> np.ndarray:
+        x, y, w, h = cv2.boundingRect(bbox.astype(np.float32))
+        roi = image[y:y+h, x:x+w]
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+
+        # 用边缘像素中位数估计背景色，适配任意背景颜色
+        border = np.concatenate([gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]])
+        bg_value = int(np.median(border))
+        diff = cv2.absdiff(gray, np.full_like(gray, bg_value))
+
+        # 检测并遮盖表格线（细长的水平/垂直连通区域），避免其梯度干扰文字bbox
+        _, line_bin = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        line_mask = np.zeros_like(line_bin)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(line_bin, connectivity=8)
+        for i in range(1, n):
+            cw, ch = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+            if cw > 0 and ch > 0 and (cw / ch > 8 or ch / cw > 8):
+                line_mask[labels == i] = 255
+        gray_masked = gray.copy()
+        gray_masked[line_mask > 0] = bg_value
+        # 消除紧贴边缘的竖线/横线梯度
+        gray_masked[:, :2] = bg_value
+        gray_masked[:, -2:] = bg_value
+        gray_masked[:2, :] = bg_value
+        gray_masked[-2:, :] = bg_value
+
+        grad_x = cv2.Sobel(gray_masked, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(gray_masked, cv2.CV_32F, 0, 1, ksize=3)
+        grad   = cv2.magnitude(grad_x, grad_y)
+        grad   = cv2.normalize(grad, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+        _, binary = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+        # 清除binary边缘残留（Sobel+morphology会让边缘梯度向内扩散）
+        edge = 3
+        binary[:edge, :] = 0
+        binary[-edge:, :] = 0
+        binary[:, :edge] = 0
+        binary[:, -edge:] = 0
+
+        coords = cv2.findNonZero(binary)
+
+        # DEBUG
+        if False:
+            import hashlib
+            import os
+            dbg_dir = "./local/shrink_debug"
+            os.makedirs(dbg_dir, exist_ok=True)
+            key = hashlib.md5(bbox.tobytes()).hexdigest()[:6]
+            cv2.imwrite(f"{dbg_dir}/{key}_roi.png", roi)
+            cv2.imwrite(f"{dbg_dir}/{key}_gray_masked.png", gray_masked)
+            cv2.imwrite(f"{dbg_dir}/{key}_binary.png", binary)
+
+        if coords is None:
+            return bbox
+
+        rx, ry, rw, rh = cv2.boundingRect(coords)
+        rx = max(rx - padding, 0)
+        ry = max(ry - padding, 0)
+        rw = min(rw + 2 * padding, w - rx)
+        rh = min(rh + 2 * padding, h - ry)
+
+        x1, y1 = x + rx,      y + ry
+        x2, y2 = x + rx + rw, y + ry + rh
+
+        return np.array([[x1,y1],[x2,y1],[x2,y2],[x1,y2]], dtype=np.float32)
+
 
 
 class FormulaPPModel(Model):

@@ -356,7 +356,7 @@ settings: dict[str, Any] = {
             # 这里的设置对应RapidOCR，然后必须使用具体的枚举类型，但是使用了这些，每次就必须载入RapidOCR这个库
             # 这个又直接载入cv2/numpy，导致在多进程下，有些不需要的，载入就变慢，所以这里还是使用字符串
             # 在这个模型中做转换处理
-            "ocr": {
+            "ocr2": {
                 "name": "RapidOCRModel",
                 "kwargs": {
                     "Global.model_root_dir": get_model_path("./models/ocr"),
@@ -414,6 +414,21 @@ settings: dict[str, Any] = {
                     "Det.limit_side_len": 736,
                     "Det.limit_type": "min",
                 },
+            },
+            "ocr":{
+                "name":"OCRModel",
+                "kwargs":{
+                    #tiny,small,medium
+                    "model":"small",
+                    "det_score_threshold":0.4,
+                    #"det_model_path":None,
+                    #"rec_model_path":None,
+                    "engine":_ocr_device.get("engine","openvino"),
+                    "use_cuda":_ocr_device.get('use_cuda',False),
+                    "use_cann":_ocr_device.get('use_cann',False),
+                    "use_dml":_ocr_device.get('use_dml',False),
+                    
+                }
             },
             "layout_v2": {
                 "name": "RapidLayoutModel",
@@ -485,8 +500,7 @@ settings: dict[str, Any] = {
                     "use_dml": _formula_device.get("use_dml", False),
                 },
             },
-
-            #下面这2个模型，支持formula，table，ocr
+            # 下面这2个模型，支持formula，table，ocr
             # 目前主要用来识别公式
             "paddle": {
                 "name": "LLMModel",
@@ -590,6 +604,15 @@ settings: dict[str, Any] = {
             # 图片解析的配置
             "image": {},
             "table": {"ybk": {}, "wbk": {}, "llm": {}},
+            "features": {
+                #这个名字空间为默认，也就是不添加到全名中，否则，feature的全名为：{ns}.{filename}
+                "default": {
+                    # 查找该包下的所有py文件
+                    "package": "memect.features",
+                    #
+                    # "class":"memect.features.feature1.Feature"
+                }
+            },
         },
         "tree": {
             # 跨页/跨栏文本合并

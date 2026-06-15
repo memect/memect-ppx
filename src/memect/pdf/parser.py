@@ -73,6 +73,8 @@ class Parser:
         self._tree_parser = XTreeParser(args.tree)
 
     def parse(self, doc: KDocument, *, runner: Runner | None = None):
+        #TODO 暂时如此设置
+        doc.manager = self._manager
         try:
 
             def check_running(name: str):
@@ -119,10 +121,9 @@ class Parser:
 
             # 解析完毕，按要求输出
             if doc.params.pptx:
-                from .pptx import PptxBuilder
-
+                from memect.pptx import PPTXBuilder
                 # pptx总是按页渲染，即使要求解析tree
-                data = PptxBuilder().build(doc)
+                data = PPTXBuilder().build(doc)
                 doc.write("doc.pptx", data)
 
             if doc.params.docx:

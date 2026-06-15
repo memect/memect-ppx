@@ -20,6 +20,7 @@ from memect.pdf.base import (
     KLine,
     KPage,
     KPDFFigure,
+    KRect,
     PDFLink,
     PDFNode,
 )
@@ -41,7 +42,7 @@ class _MSRectCleaner:
         class _Rect:
             def __init__(self, path: _Path):
                 self.path = path
-                self.bbox: BBox = path['bbox']#BBox(*path["bbox"])
+                self.bbox: BBox = path["bbox"]  # BBox(*path["bbox"])
                 self.stroke: Any = path.get("stroked")
                 self.fill: tuple[Any, Any] | None = (
                     (path.get("color"), path.get("alpha"))
@@ -54,7 +55,7 @@ class _MSRectCleaner:
 
         def merge_paths(rects: Sequence[_Rect]) -> _Path:
             bbox = BBox.join([rect.bbox for rect in rects])
-            #assert bbox is not None
+            # assert bbox is not None
             path = dict(rects[0].path)
             path["bbox"] = bbox
             path["isrect"] = True
@@ -77,7 +78,9 @@ class _MSRectCleaner:
                     return False
             return True
 
-        def get_left_right(i: int, w_d: float = 5, y_d: float = 2) -> list[_Rect] | None:
+        def get_left_right(
+            i: int, w_d: float = 5, y_d: float = 2
+        ) -> list[_Rect] | None:
             if i + 1 >= len(rects):
                 return None
             left_rect = rects[i]
@@ -226,7 +229,11 @@ class _MSRectCleaner:
             contents = rects[i + 3]
             if not is_shape_like(top, right, bottom, contents):
                 return -1
-            if abs(top[2] - right[2]) > x_d or right[2] - right[0] > 10 or right[0] < top[0]:
+            if (
+                abs(top[2] - right[2]) > x_d
+                or right[2] - right[0] > 10
+                or right[0] < top[0]
+            ):
                 return -1
             if abs(top[1] - right[3]) > y_d:
                 return -1
@@ -249,7 +256,11 @@ class _MSRectCleaner:
             contents = rects[i + 3]
             if not is_shape_like(top, left, bottom, contents):
                 return -1
-            if abs(top[0] - left[0]) > x_d or left[2] - left[0] > 10 or left[2] > top[2]:
+            if (
+                abs(top[0] - left[0]) > x_d
+                or left[2] - left[0] > 10
+                or left[2] > top[2]
+            ):
                 return -1
             if abs(top[1] - left[3]) > y_d:
                 return -1
@@ -273,7 +284,10 @@ class _MSRectCleaner:
                 return -1
             if left[2] - left[0] > 10:
                 return -1
-            if abs(contents1[0] - contents2[0]) > x_d or abs(contents1[2] - contents2[2]) > x_d:
+            if (
+                abs(contents1[0] - contents2[0]) > x_d
+                or abs(contents1[2] - contents2[2]) > x_d
+            ):
                 return -1
             if abs(contents1[1] - contents2[3]) > y_d:
                 return -1
@@ -354,12 +368,12 @@ class Parser:
         with pymupdf.Document(filename=kdoc.file, filetype="pdf") as doc:
             for kpage in kdoc.working_pages:
                 self._parse_page(doc, kpage)
-            
-            self._parse_toc(doc,kdoc)
+
+            self._parse_toc(doc, kdoc)
 
     def _parse_page(self, doc: pymupdf.Document, kpage: KPage):
         self._parse_rawdict(doc, kpage)
-        self._parse_links(doc,kpage)
+        self._parse_links(doc, kpage)
 
     def _parse_rawdict(self, doc: pymupdf.Document, kpage: KPage):
         page: Final = doc[kpage.number - 1]
@@ -386,7 +400,7 @@ class Parser:
                     parse_span(span)
 
         def parse_span(span: Any):
-            verbose=False
+            verbose = False
             alpha = span["alpha"]
             # 原点为左上角
             bbox = span["bbox"]
@@ -437,7 +451,7 @@ class Parser:
             if verbose and debugger.allow("info"):
                 with debugger.group("span"):
                     print("".join(c["c"] for c in span["chars"]))
-                    #print([c["bbox"] for c in span['chars']])
+                    # print([c["bbox"] for c in span['chars']])
                     print(
                         {
                             "bold": is_bold,
@@ -458,8 +472,8 @@ class Parser:
                 bbox = BBox.from_list(char["bbox"], matrix=matrix)
                 origin = char["origin"]
                 text = char["c"]
-                raw_text=text
-                wingdings_text=None
+                raw_text = text
+                wingdings_text = None
                 j = i + 1
                 while j < len(chars):
                     char2 = chars[j]
@@ -482,15 +496,26 @@ class Parser:
                         ord(text),
                     )
                 elif font.wingdings:
-                    #TODO 如果是ms生成的pdf，通常使用的是0x20-0xff之间的编码，而且是一一对应
-                    #如果是wps，通常使用的是0xf020-0xf0ff之间的编码，也是一一对应
-                    #如果是其他软件制作的，就不一定了，如果需要准确的，就需要设置force=True，也就是总是通过视觉识别
-                    force=True
+                    # TODO 如果是ms生成的pdf，通常使用的是0x20-0xff之间的编码，而且是一一对应
+                    # 如果是wps，通常使用的是0xf020-0xf0ff之间的编码，也是一一对应
+                    # 如果是其他软件制作的，就不一定了，如果需要准确的，就需要设置force=True，也就是总是通过视觉识别
+                    force = True
                     cv2_image = get_cv2_image()
-                    h,w = cv2_image.shape[0:2]
-                    m = kpage.to_lt((w,h))
-                    wingdings_text,text = font.normalize_wingdings(cv2_image,bbox.transform(m).to_int(),text,force=force)
-                    self._logger.info('normalize wingdings,page=%s,from=(%s,0x%04X),to=(%s,0x%04X),unicode=(%s,0x%04X)',kpage.number,raw_text,ord(raw_text),wingdings_text,ord(wingdings_text),text,ord(text))
+                    h, w = cv2_image.shape[0:2]
+                    m = kpage.to_lt((w, h))
+                    wingdings_text, text = font.normalize_wingdings(
+                        cv2_image, bbox.transform(m).to_int(), text, force=force
+                    )
+                    self._logger.info(
+                        "normalize wingdings,page=%s,from=(%s,0x%04X),to=(%s,0x%04X),unicode=(%s,0x%04X)",
+                        kpage.number,
+                        raw_text,
+                        ord(raw_text),
+                        wingdings_text,
+                        ord(wingdings_text),
+                        text,
+                        ord(text),
+                    )
                 elif verbose:
                     # 对应单个文本，就不管了，返回什么就是什么
                     # 如果无法找到准确的
@@ -541,7 +566,7 @@ class Parser:
                             subtype="superscript" if is_superscript else None,
                             source=CharSource.PDF,
                             raw_text=raw_text,
-                            wingdings_text=wingdings_text
+                            wingdings_text=wingdings_text,
                         )
                     )
                 else:
@@ -553,20 +578,20 @@ class Parser:
         def parse_image(block: Any):
             pass
 
+        cv2_image = None
 
-        cv2_image=None
-        def get_cv2_image()->Any:
+        def get_cv2_image() -> Any:
             """在识别wingdings的时候需要"""
             nonlocal cv2_image
             if cv2_image is None:
-                cv2_image=images.pil_to_cv2(kpage.image)
+                cv2_image = images.pil_to_cv2(kpage.image)
             return cv2_image
 
         use_images = False
         use_paths = True
         ignore_actual_text = False
         # 这是默认的rawdict的flags
-        flags:int = (
+        flags: int = (
             pymupdf.TEXT_PRESERVE_LIGATURES
             | pymupdf.TEXT_PRESERVE_WHITESPACE
             | pymupdf.TEXT_MEDIABOX_CLIP
@@ -582,7 +607,7 @@ class Parser:
         if use_paths:
             flags = flags | pymupdf.TEXT_COLLECT_VECTORS
         if use_images:
-            #连内容也返回，比较耗时
+            # 连内容也返回，比较耗时
             flags = flags | pymupdf.TEXT_PRESERVE_IMAGES
         if ignore_actual_text:
             # 如果不设置这个，当cid对应的unicode为\u0000的时候，就使用ActualText（如果有，当然，不一定和显示的一致）
@@ -590,16 +615,16 @@ class Parser:
             flags = flags | pymupdf.TEXT_IGNORE_ACTUALTEXT
 
         timer = utils.Timer.start()
-        with timer.watch('text'):
+        with timer.watch("text"):
             result: dict[str, Any] = page.get_text("rawdict", flags=flags)
-        #matrix: Final = Matrix.lt_to_lb((result["width"], result["height"]), kpage.size)
-        matrix:Final = kpage.to_lb()
+        # matrix: Final = Matrix.lt_to_lb((result["width"], result["height"]), kpage.size)
+        matrix: Final = kpage.to_lb()
         kpage.pdf_chars.clear()
-        #kpage.pdf_paths.clear()
+        # kpage.pdf_paths.clear()
         kpage.pdf_lines.clear()
         kpage.pdf_rects.clear()
 
-        with timer.watch('block'):
+        with timer.watch("block"):
             for block in result["blocks"]:
                 type_ = block["type"]
                 if type_ == 0:
@@ -608,43 +633,40 @@ class Parser:
                     parse_image(block)
                 else:
                     pass
-        
+
         if not kpage.pdf_chars:
             # 没有文字，就按图片解析，不管是什么样了
             self._logger.info("第%s页没有文字，不需要再解析", kpage.number)
             return
-        
-        with timer.watch('figure'):
+
+        with timer.watch("figure"):
             # 如果多个图片组成一个大图，一样按图片解析，不管图片是背景还是扫描（可能覆盖文字）
             if self._parse_figures(doc, kpage):
                 return
-        
-        with timer.watch('path'):
+
+        with timer.watch("path"):
             if use_paths:
-                paths:list[Any]=[]
+                paths: list[Any] = []
                 for block in result["blocks"]:
                     type_ = block["type"]
                     if type_ == 3:
-                        #从左上角坐标转换为左下角坐标
-                        block['bbox']=BBox.from_list(block["bbox"], matrix=matrix)
+                        # 从左上角坐标转换为左下角坐标
+                        block["bbox"] = BBox.from_list(block["bbox"], matrix=matrix)
                         paths.append(block)
                     else:
                         pass
-                self._parse_paths(doc,kpage,paths)
+                self._parse_paths(doc, kpage, paths)
             else:
                 # 如果没有一同返回path，就需要单独解析
-                #page.get_cdrawings()
+                # page.get_cdrawings()
                 pass
-        
-        
 
     def _get_font(self, span: Any) -> KFont:
-        #span={'flags':1,'font':'xxxx'}
+        # span={'flags':1,'font':'xxxx'}
         flags = span["flags"]
         is_monospace = flags & 8
         is_serif = flags & 4
-        return KFont.get(span['font'],monospace=is_monospace,serif=is_serif)
-
+        return KFont.get(span["font"], monospace=is_monospace, serif=is_serif)
 
     def _normalize_text(self, text: str) -> str:
         # 仅仅归一化特殊的字符，不归一化标点符号等
@@ -679,12 +701,12 @@ class Parser:
     def _parse_figures(self, doc: pymupdf.Document, kpage: KPage) -> bool:
         """解析图片，如果返回True，表示整个页面作为图片，不需要再解析"""
 
-        def is_full_page(page:pymupdf.Page,bboxes: list[Any]):
+        def is_full_page(page: pymupdf.Page, bboxes: list[Any]):
             # 这里使用的坐标原点为页面左上角
             from shapely.geometry import box
             from shapely.ops import unary_union
 
-            bboxes = [b for b in bboxes if b[2]-b[0]>10 or b[3]-b[1]>10]
+            bboxes = [b for b in bboxes if b[2] - b[0] > 10 or b[3] - b[1] > 10]
             # 如果需要再严格一点，获得
             # 使用page.rect还是page.bound()?
             page_box = box(*page.rect)
@@ -709,55 +731,54 @@ class Parser:
                 return True
             return False
 
-        def has_chars(bbox:BBox)->bool:
-            chars = bbox.get(kpage.pdf_chars,ratio=0.8)
-            return len(chars)>0
-        
+        def has_chars(bbox: BBox) -> bool:
+            chars = bbox.get(kpage.pdf_chars, ratio=0.8)
+            return len(chars) > 0
+
         debugger: Final = self._debugger.bind(page=kpage.number)
-        timer:Final=utils.Timer.start()
-        page:Final= doc[kpage.number - 1]
+        timer: Final = utils.Timer.start()
+        page: Final = doc[kpage.number - 1]
         # 如果需要获得xref，这里需要通过digest来比较，而不是简单的/Im1 do => /Im1 1 0  => xref=1
         # 因为底层的实现没有返回渲染图片指令的name，无法根据name再获得xref，就只能够通过digest比较了
-        with timer.watch('get_image_info'):
-            #如果是1万多个小图片，如：微软的word2007制作的pdf，虚线使用小图片，需要1-2秒
+        with timer.watch("get_image_info"):
+            # 如果是1万多个小图片，如：微软的word2007制作的pdf，虚线使用小图片，需要1-2秒
             images: list[Any] = page.get_image_info()  # type: ignore
 
-        #有些页面使用多个小图片组成，可能几百个
-        #但是，在有些情况下，虚线等也是使用小图片，可能为几万个，计算就非常非常的慢了
+        # 有些页面使用多个小图片组成，可能几百个
+        # 但是，在有些情况下，虚线等也是使用小图片，可能为几万个，计算就非常非常的慢了
 
-        
-        with timer.watch('figure_as_page'):
-            if is_full_page(page,[image["bbox"] for image in images]):
+        with timer.watch("figure_as_page"):
+            if is_full_page(page, [image["bbox"] for image in images]):
                 return True
-        with timer.watch('figure_as_line'):
+        with timer.watch("figure_as_line"):
             figure_lines = _FigureConnector().connect_figures(kpage, images)
             kpage.pdf_lines.extend(figure_lines)
-        
-        with timer.watch('figure'):
+
+        with timer.watch("figure"):
             figures: list[KPDFFigure] = []
             m = Matrix.lt_to_lb(kpage.size)
             small_images: list[Any] = []
             transparent_images: list[Any] = []
-            no_chars_images:list[Any]=[]
+            no_chars_images: list[Any] = []
             for image in images:
                 # number = image["number"]
                 # xref = image.get('xref',0)
                 transparent = image["has-mask"]
-                #bbox = image["bbox"]
-                raw_bbox = image['bbox']
-                if raw_bbox[2]-raw_bbox[0] <= 2 or raw_bbox[3]-raw_bbox[1] <= 2:
+                # bbox = image["bbox"]
+                raw_bbox = image["bbox"]
+                if raw_bbox[2] - raw_bbox[0] <= 2 or raw_bbox[3] - raw_bbox[1] <= 2:
                     small_images.append(image)
                 elif transparent:
                     # TODO 不去掉也可以的
                     # 如果是透明的图片，也不要了，因为可能是普通的图，也可能是背景，
                     # 当然也可能是ocr文字（概率比较低，不应该去掉）
                     # 如果是背景，应该去掉，否则会认为是ocr文字，使用ocr处理，虽然也没有错，但是没有必要
-                    bbox=BBox.from_list(image["bbox"], matrix=m)
+                    bbox = BBox.from_list(image["bbox"], matrix=m)
                     if has_chars(bbox):
                         # 这个例子使用带虚线的透明背景，应该去掉，因为不需要使用ocr
                         # local/cases/test/16-线由小图片组成-解析非常耗时.pdf 52页
                         transparent_images.append(image)
-                        #但是，如果有些表格有图片的，这些图片就需要保留
+                        # 但是，如果有些表格有图片的，这些图片就需要保留
                     else:
                         # 这个例子多数字符都是使用图片，就需要使用ocr
                         # local/cases/test/文字都是小图片.pdf
@@ -777,73 +798,79 @@ class Parser:
                     len(small_images),
                     len(transparent_images),
                 )
-        
-        #保留pdf图片的目的，只是为了通过ocr补充需要，所以，如果可能为文字的，就保留
+
+        # 保留pdf图片的目的，只是为了通过ocr补充需要，所以，如果可能为文字的，就保留
         kpage.pdf_figures.clear()
         kpage.pdf_figures.extend(figures)
         for image in no_chars_images:
-            kpage.pdf_figures.append(KPDFFigure(
+            kpage.pdf_figures.append(
+                KPDFFigure(
                     kpage,
                     BBox.from_list(image["bbox"], matrix=m).to_quad(),
                     transparent=True,
-                ))
-        self._logger.warning('第%s页，图片=%s,没有文字遮挡的透明图片=%s',kpage.number,len(figures),len(no_chars_images))
+                )
+            )
+        self._logger.warning(
+            "第%s页，图片=%s,没有文字遮挡的透明图片=%s",
+            kpage.number,
+            len(figures),
+            len(no_chars_images),
+        )
         return False
 
-    def _parse_paths(self,doc:pymupdf.Document,page:KPage,paths:Sequence[Any]):
+    def _parse_paths(self, doc: pymupdf.Document, page: KPage, paths: Sequence[Any]):
         debugger = self._debugger.bind(page=page.number)
-        raw_paths:Final=paths
+        raw_paths: Final = paths
 
-        def filter1(paths:Sequence[Any])->list[Any]:
-            new_paths:list[Any]=[]
+        def filter1(paths: Sequence[Any]) -> list[Any]:
+            new_paths: list[Any] = []
             for path in paths:
                 # TODO 有些线使用无数个点组成，还需要吗？
                 # 现在不解析，原样保留，在处理表格的时候，需要再解析
                 # 如：有些地图或者其他，有十几万条线的
-                if path['isrect'] and path['alpha']>0:
-                    #re通过fill来填充矩形，如果是很小的矩形，就是线，而边框很少用来作为表格线
-                    #ml和ll等，通过stroke来画线
-                    #kpage.pdf_paths.append(block)
-                    #先处理了特殊的矩形合并？
+                if path["isrect"] and path["alpha"] > 0:
+                    # re通过fill来填充矩形，如果是很小的矩形，就是线，而边框很少用来作为表格线
+                    # ml和ll等，通过stroke来画线
+                    # kpage.pdf_paths.append(block)
+                    # 先处理了特殊的矩形合并？
                     new_paths.append(path)
                 else:
-                    #曲线或者斜线，去掉
+                    # 曲线或者斜线，去掉
                     pass
             return new_paths
-        
-        def filter2(paths:Sequence[Any]):
-            #需要考虑特殊的文档有几十万条线的情况，避免解析太慢
+
+        def filter2(paths: Sequence[Any]):
+            # 需要考虑特殊的文档有几十万条线的情况，避免解析太慢
             paths = list(paths)
             for vobj in page.vobjects:
                 if vobj.is_any_text() or vobj.is_table():
-                    #在文本框和表格区域的保留，或者页面页脚区域的（这两个也不重要）
-                    #文本区域是考虑删除线或者下划线？
+                    # 在文本框和表格区域的保留，或者页面页脚区域的（这两个也不重要）
+                    # 文本区域是考虑删除线或者下划线？
                     pass
                 else:
-                    vobj.bbox.expand(dx=2,dy=2).get(paths,ratio=0.5,remove=True)
-                    
+                    vobj.bbox.expand(dx=2, dy=2).get(paths, ratio=0.5, remove=True)
+
             return paths
-        
-        
-        def split(paths:list[Any]):
-            line_paths:list[Any]=[]
-            rect_paths:list[Any]=[]
+
+        def split(paths: list[Any]):
+            line_paths: list[Any] = []
+            rect_paths: list[Any] = []
             for path in paths:
-                bbox = path['bbox']
-                if bbox[2]-bbox[0]>=5 and bbox[3]-bbox[1]>=5:
-                    if not path['stroked']:
+                bbox = path["bbox"]
+                if bbox[2] - bbox[0] >= 5 and bbox[3] - bbox[1] >= 5:
+                    if not path["stroked"]:
                         rect_paths.append(path)
                 else:
+                    # 线或者矩形（fill）
                     line_paths.append(path)
-            return line_paths,rect_paths
+            return line_paths, rect_paths
 
         def remove_underlines(paths: Sequence[Any]) -> list[Any]:
             """删除使用 path 渲染的文字下划线，避免后续被识别为表格线。"""
             if not paths or not page.pdf_chars:
                 return list(paths)
 
-
-            items = [(path,path['bbox']) for path in paths]
+            items = [(path, path["bbox"]) for path in paths]
 
             def is_h(bbox: BBox) -> bool:
                 return bbox.width >= 2 and bbox.height <= 3
@@ -926,126 +953,153 @@ class Parser:
             for group in group_h_lines():
                 if is_underline_group(group):
                     for path, _ in group:
-                        self._logger.warning('第%s页的表格有下划线:%s',page.number,path)
+                        self._logger.warning(
+                            "第%s页的表格有下划线:%s", page.number, path
+                        )
                         underline_paths.add(id(path))
-            
+
             if not underline_paths:
                 return list(paths)
-            
+
             return [path for path in paths if id(path) not in underline_paths]
 
-        def is_ms()->bool:
-            producer:str|None = cast(str|None,doc.metadata.get('producer')) # type: ignore
+        def is_ms() -> bool:
+            producer: str | None = cast(str | None, doc.metadata.get("producer"))  # type: ignore
             if not producer:
                 return False
             producer = producer.lower()
-            #2007的才处理？
-            return bool(re.search(r'microsoft',producer) and re.search(r'word[\s]*2007',producer))
-        
-        timer=utils.Timer.start()
-        with timer.watch('filter'):
+            # 2007的才处理？
+            return bool(
+                re.search(r"microsoft", producer)
+                and re.search(r"word[\s]*2007", producer)
+            )
+
+        timer = utils.Timer.start()
+        with timer.watch("filter"):
             paths = filter1(paths)
             paths = filter2(paths)
-            #TODO 后续为了提高速度，可以检查是否为：Creator: Microsoft® Office Word 2007 等制作的pdf
-            #这样减少不必要的判断（虽然可能这个信息被删除了，导致漏判）
+            # TODO 后续为了提高速度，可以检查是否为：Creator: Microsoft® Office Word 2007 等制作的pdf
+            # 这样减少不必要的判断（虽然可能这个信息被删除了，导致漏判）
             if is_ms():
                 paths = _MSRectCleaner().clean(paths)
-            line_paths,rect_paths = split(paths)
+            line_paths, rect_paths = split(paths)
 
-        #删除下划线
+        # 删除下划线
         line_paths = remove_underlines(line_paths)
-        
-        with timer.watch('merge'):
-            h_lines,v_lines = _LineParser().parse(page,line_paths)
-            #可能已经存在了来自小图片组成的线
-            #page.pdf_lines.clear()
+
+        with timer.watch("merge"):
+            h_lines, v_lines = _LineParser().parse(page, line_paths)
+            # 可能已经存在了来自小图片组成的线
+            # page.pdf_lines.clear()
             page.pdf_lines.extend(h_lines)
             page.pdf_lines.extend(v_lines)
 
-            #矩形的合并，目的是为了能够还原背景，非常复杂的计算
+            # 矩形的合并，目的是为了能够还原背景，非常复杂的计算
+            # 为了解析速度，目前只需要大一些的rect，以便在表格单元格计算背景颜色使用，由word生成的彩色表格，一个单元格由多个矩形
+            # 现在只需要大的
+            rects = _RectParser().parse(page, rect_paths)
             page.pdf_rects.clear()
-            page.pdf_rects.extend([])
+            page.pdf_rects.extend(rects)
 
-        if debugger.allow('info'):
-            debugger.print(f'第{page.number}页,耗时={timer.elapsed()}，原始路径={len(raw_paths)},line_paths={len(line_paths)},rect_paths={len(rect_paths)}，合并后=({len(h_lines)},{len(v_lines)})')
-        
-        if debugger.allow('draw'):
-            #TODO 为了渲染这些线，还需要转换一下
-            def draw_paths(paths:Sequence[Any]):
+        if debugger.allow("info"):
+            debugger.print(
+                f"第{page.number}页,耗时={timer.elapsed()}，原始路径={len(raw_paths)},line_paths={len(line_paths)},rect_paths={len(rect_paths)}，合并后=({len(h_lines)},{len(v_lines)})"
+            )
+
+        if debugger.allow("draw"):
+            # TODO 为了渲染这些线，还需要转换一下
+            def draw_paths(paths: Sequence[Any]):
                 img = page.image.copy()
                 draw = PIL.ImageDraw.Draw(img)
-                #m = Matrix().scale(img.width / page.width, img.height / page.height)
+                # m = Matrix().scale(img.width / page.width, img.height / page.height)
                 m = page.to_lt(img.size)
                 for path in paths:
-                    #x0, y0, x1, y1 = path['bbox']#BBox.from_list(path["bbox"], matrix=m)
-                    x0, y0, x1, y1 = path['bbox'].transform(m)
+                    # x0, y0, x1, y1 = path['bbox']#BBox.from_list(path["bbox"], matrix=m)
+                    x0, y0, x1, y1 = path["bbox"].transform(m)
                     # color = path['color']
                     if path["stroked"]:
                         draw.line((x0, y0, x1, y1), fill=(0, 0, 255), width=2)
                     else:
                         draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 0))
                 return img
-            lines=h_lines+v_lines
-            page.draw(('page',None),('vobjects',page.vobjects),(f'raw paths={len(raw_paths)}',draw_paths(raw_paths)),(f'rect paths={len(rect_paths)}',draw_paths(rect_paths)),('rects',[]),(f'line paths={len(line_paths)}',draw_paths(line_paths)),(f'lines={len(h_lines)},{len(v_lines)}',lines),dir='debug/default/pymupdf')
 
-    def _parse_toc(self,doc:pymupdf.Document,kdoc:KDocument):
-        items = doc.get_toc(simple=False) # type: ignore
+            lines = h_lines + v_lines
+            page.draw(
+                ("page", None),
+                ("vobjects", page.vobjects),
+                (f"raw paths={len(raw_paths)}", draw_paths(raw_paths)),
+                (f"rect paths={len(rect_paths)}", draw_paths(rect_paths)),
+                ("rects", []),
+                (f"line paths={len(line_paths)}", draw_paths(line_paths)),
+                (f"lines={len(h_lines)},{len(v_lines)}", lines),
+                dir="debug/default/pymupdf",
+            )
+
+    def _parse_toc(self, doc: pymupdf.Document, kdoc: KDocument):
+        items = doc.get_toc(simple=False)  # type: ignore
         root = PDFNode()
         for item in items:
-            node=PDFNode()
-            node.level=item[0]
-            node.title=item[1]
-            #1表示第一页，-1表示没有
-            node.page_number=item[2]
+            node = PDFNode()
+            node.level = item[0]
+            node.title = item[1]
+            # 1表示第一页，-1表示没有
+            node.page_number = item[2]
             dest = item[3]
-            if dest['kind']==1:
-                #指向当前文档的某个页面的某个位置
-                #页码，0表示第一页
-                dest['page']
-                #为没有应用page.rotation前的坐标，如果页面应用了，这个也需要跟着变化
-                #pdf原始的值使用左下角坐标，但是pymupdf转换为左上角坐标，这里再转回来
-                page = kdoc.pages[node.page_number-1]
-                #TODO 后续还需要应用旋转
-                m=page.to_lb()
-                to=dest['to']
-                node.point=Point(to.x,to.y).transform(m)
-            elif dest['kind']==4:
-                #指向一个命名位置
-                dest['nameddest']
-                node.type='other'
+            if dest["kind"] == 1:
+                # 指向当前文档的某个页面的某个位置
+                # 页码，0表示第一页
+                dest["page"]
+                # 为没有应用page.rotation前的坐标，如果页面应用了，这个也需要跟着变化
+                # pdf原始的值使用左下角坐标，但是pymupdf转换为左上角坐标，这里再转回来
+                page = kdoc.pages[node.page_number - 1]
+                # TODO 后续还需要应用旋转
+                m = page.to_lb()
+                to = dest["to"]
+                node.point = Point(to.x, to.y).transform(m)
+            elif dest["kind"] == 4:
+                # 指向一个命名位置
+                dest["nameddest"]
+                node.type = "other"
             else:
-                #其他的都是打开文件/跳转到其他pdf/或者打开uri
-                node.type='other'
-            root.get_last_node(node.level-1).add(node)
-        
-        #最后去掉没有意义的
-        def clean(node:PDFNode):
-            if node.type!='title':
+                # 其他的都是打开文件/跳转到其他pdf/或者打开uri
+                node.type = "other"
+            root.get_last_node(node.level - 1).add(node)
+
+        # 最后去掉没有意义的
+        def clean(node: PDFNode):
+            if node.type != "title":
                 node.detach()
             else:
                 for child in node.children:
                     clean(child)
-        
-        clean(root)
-        kdoc.pdf_toc=root
 
-    def _parse_links(self,doc: pymupdf.Document, kpage: KPage):
-        page = doc.load_page(kpage.number-1)
-        #Annots中Subtype=Link
+        clean(root)
+        kdoc.pdf_toc = root
+
+    def _parse_links(self, doc: pymupdf.Document, kpage: KPage):
+        page = doc.load_page(kpage.number - 1)
+        # Annots中Subtype=Link
         link = page.first_link
         m = kpage.to_lb()
-        links:list[PDFLink]=[]
+        links: list[PDFLink] = []
         while link is not None:
             dest = link.dest
-            if dest.kind==1:
-                #pymupdf已经转换为原点为左上角，现在需要转换为左下角
+            if dest.kind == 1:
+                # pymupdf已经转换为原点为左上角，现在需要转换为左下角
                 rect = link.rect.transform(m)
                 point = dest.lt.transform(m)
-                #print(link.xref,rect,dest.page,point)
-                links.append(PDFLink(BBox(rect.x0,rect.y0,rect.x1,rect.y1),dest.page,Point(point.x,point.y)))
+                # print(link.xref,rect,dest.page,point)
+                links.append(
+                    PDFLink(
+                        BBox(rect.x0, rect.y0, rect.x1, rect.y1),
+                        dest.page,
+                        Point(point.x, point.y),
+                    )
+                )
 
             link = link.next
         kpage.pdf_links = tuple(links)
+
 
 class _Parser2:
     def _parse_texttrace(self, doc: pymupdf.Document, kpage: KPage):
@@ -1360,8 +1414,6 @@ class _Parser2:
         # 如果有数量太大的，就不解析了，因为可能为整页都是使用线来渲染文字
         # 或者为复杂的图形，即使有有边框表格，也不要这些线了，解析太耗时
 
-
-
         def count_page(page: pymupdf.Page) -> int:
             # 一个页面可能有多个内容流
             n = 0
@@ -1421,8 +1473,8 @@ class _Parser2:
         # 这个比上一个需要多一倍的时间，区别就是使用了Point，Rect，Quad对象
         # drawings = page.get_drawings(True)
         # 只是保存，不解析，用到的时候再处理
-        #kpage.pdf_drawings = page.get_cdrawings()  # type: ignore
-        #print("========>paths", total, len(kpage.pdf_drawings))
+        # kpage.pdf_drawings = page.get_cdrawings()  # type: ignore
+        # print("========>paths", total, len(kpage.pdf_drawings))
 
     def _use_paths(self, drawings: Sequence[Any]):
         clip_paths = []
@@ -1479,9 +1531,13 @@ class _Parser2:
                     # 没有，不用裁剪
                     pass
 
+
 type _Rect = tuple[float, float, float, float]
+
+
 class _LineParser:
     """pdf的线可能是由很多个小矩形/小点等组成，这里合并为水平线和垂直线"""
+
     def __init__(
         self,
         *,
@@ -1500,7 +1556,9 @@ class _LineParser:
         self._min_length = min_length  # 最小线长度
         self._gap_threshold = gap_threshold  # 线段间隙阈值，超过此值则分开
 
-    def parse(self, page: KPage,paths:Sequence[Any]) -> tuple[list[KLine], list[KLine]]:
+    def parse(
+        self, page: KPage, paths: Sequence[Any]
+    ) -> tuple[list[KLine], list[KLine]]:
         # 线可能为很多个点，或者很多小段的线组成
         # 而且还包含文字的下划线，删除线
         # 第一步是先解析表格线
@@ -1553,7 +1611,7 @@ class _LineParser:
                 line_width = bbox[y1] - bbox[y0]
                 y = (bbox[y1] + bbox[y0]) / 2
             # 转换为左下角为原点
-            #bbox = bbox.set((y0, y), (y1, y)).transform(page.to_lb())
+            # bbox = bbox.set((y0, y), (y1, y)).transform(page.to_lb())
             bbox = bbox.set((y0, y), (y1, y))
             return KLine(page, bbox, color=color, width=line_width)
 
@@ -1696,36 +1754,56 @@ class _LineParser:
         return [g for g in continuous_groups if is_valid(g)]
         # return continuous_groups
 
+
 class _RectParser:
     def __init__(self):
         super().__init__()
-    
-    def parse(self,page:KPage,rects:Sequence[Any]):
+
+    def parse(self, page: KPage, rects: Sequence[Any]):
         """合并矩形"""
-        #有些使用多个小矩形表示一个大矩形，如：
-        #--r1--
-        #|     |
-        #r2-r3-r4
-        #|     |
-        #--r5--
-        pass
+        # 有些使用多个小矩形表示一个大矩形，如：
+        # --r1--
+        # |     |
+        # r2-r3-r4
+        # |     |
+        # --r5--
+
+        from pymupdf import sRGB_to_rgb
+
+        def get_color(color: Any, alpha: float = 1):
+            # 如果需要计算复杂，获得所有的颜色取平均值？这个意义又不大
+            if isinstance(color, int):
+                rgb = sRGB_to_rgb(color)
+            else:
+                rgb = color
+            return KColor.from_list(
+                rgb, is_float=False, alpha=alpha, colors=page.doc.colors
+            )
+
+        new_rects: list[KRect] = []
+        for rect in rects:
+            color = get_color(rect["color"], rect["alpha"] / 255)
+            # bbox已经转换为BBox且原点为左下角
+            new_rects.append(KRect(page, rect["bbox"], color=color))
+        return new_rects
 
 
 type _Point = tuple[int, int]
 type _Segment = tuple[int, int, _FigureInfo]
 type _LineBBox = tuple[int, int, int, int]
 type _LineGroup = tuple[_LineBBox, list[_FigureInfo]]
+
+
 class _FigureConnector:
     """
     有些文件是使用很多小图片连接在一起画一条线，这些都是古老的pdf制作工具引起的了，新的pdf文件很少出现这种情况了。
 
     """
 
-    _logger=logging.getLogger(f'{__module__}.{__qualname__}')
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
     _min_line_length: Final = 5
     _max_gap: Final = 2
     _axis_tolerance: Final = 2
-
 
     def __init__(self):
         pass
@@ -1735,12 +1813,12 @@ class _FigureConnector:
         使用image来画线，把图片连接起来，作为一条线处理
         """
 
-
-
         def as_int(bbox: Sequence[float]) -> tuple[int, int, int, int]:
             return (round(bbox[0]), round(bbox[1]), round(bbox[2]), round(bbox[3]))
 
-        def add(m: dict[int, list[_Segment]], key: int, point: _Point, figure: _FigureInfo) -> None:
+        def add(
+            m: dict[int, list[_Segment]], key: int, point: _Point, figure: _FigureInfo
+        ) -> None:
             line = m.get(key, None)
             if line is None:
                 line = []
@@ -1764,12 +1842,18 @@ class _FigureConnector:
                         current.append(segment)
                     else:
                         if end - start >= self._min_line_length:
-                            bbox: _LineBBox = (start, k, end, k) if is_h else (k, start, k, end)
+                            bbox: _LineBBox = (
+                                (start, k, end, k) if is_h else (k, start, k, end)
+                            )
                             lines.append((bbox, [seg[2] for seg in current]))
                         start, end = s0, s1
                         current = [segment]
 
-                if start is not None and end is not None and end - start >= self._min_line_length:
+                if (
+                    start is not None
+                    and end is not None
+                    and end - start >= self._min_line_length
+                ):
                     bbox = (start, k, end, k) if is_h else (k, start, k, end)
                     lines.append((bbox, [seg[2] for seg in current]))
             return lines
@@ -1792,7 +1876,7 @@ class _FigureConnector:
                 # 垂直线
                 x = min(x0, x1)
                 add(v_map, x, (y0, y1), figure)
-        
+
         h_lines = calc_lines(h_map, True)
         v_lines = calc_lines(v_map, False)
         # 这里作为线返回，还是作为一个图片返回，如：
@@ -1801,14 +1885,16 @@ class _FigureConnector:
         used_figures: set[int] = set()
         m = page.to_lb()
         for b, line_figures in h_lines + v_lines:
-            #从左上角转换为左下角
+            # 从左上角转换为左下角
             bbox = BBox.from_list(b, matrix=m)
             line = KLine(page, bbox)
             lines.append(line)
             used_figures.update(id(figure) for figure in line_figures)
 
         if used_figures:
-            figures[:] = [figure for figure in figures if id(figure) not in used_figures]
+            figures[:] = [
+                figure for figure in figures if id(figure) not in used_figures
+            ]
         if lines:
             self._logger.info(
                 "connect figures as line from=%s to=%s lines=%s",
@@ -1816,5 +1902,5 @@ class _FigureConnector:
                 len(figures),
                 len(lines),
             )
-       
+
         return lines

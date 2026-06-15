@@ -1,4 +1,5 @@
 # coding=utf-8
+from enum import StrEnum, auto
 import json
 import os
 import re
@@ -243,6 +244,12 @@ def _detect_gpu() -> dict[str, bool]:
 
     return result
 
+
+class OCRModel(StrEnum):
+    TINY=auto()
+    SMALL=auto()
+    MEDIUM=auto()
+
 @app.command()
 def start(
     host: Annotated[str | None, typer.Option(help="监听地址")] = None,
@@ -313,10 +320,12 @@ def parse(
     ] = None,
     mode: Annotated[ParseMode | None, typer.Option(help="仅仅解析页，或者解析章节树")] = None,
     ocr: Annotated[OCRMode | None, typer.Option(help="如何使用ocr")] = None,
+    ocr_model:Annotated[OCRModel|None,typer.Option(help='tiny,small,medium')]=None,
     table: Annotated[TableMode | None, typer.Option(help="如何解析表格")] = None,
     formula:Annotated[str|None,typer.Option(help='可以指定解析公式的paddle/glm的url，或者no|pp|mfr|paddle|glm，指定paddle/glm，需要先配置url，no表示不解析公式，仅仅保存为图片')]=None,
     # remove_watermark:Annotated[bool|None,typer.Option(help='设置是否需要清除水印')]=None,
     tree:Annotated[TreeBackend|None,typer.Option(help='如何解析章节树')]=None,
+    feature:Annotated[str|None,typer.Option(help='可以输入多个，使用逗号分隔')]=None,
     # all:Annotated[bool,typer.Option()]=None,
     md: Annotated[bool | None, typer.Option(help="生成markdown，默认为true")] = None,
     doc_json: Annotated[bool | None, typer.Option("--json", help="输出json，默认为true")] = None,
@@ -397,6 +406,9 @@ def parse(
         pass
     _apply_formula_settings(formula, custom_settings, params)
 
+    if ocr_model:
+        custom_settings['model_manager.models.ocr.kwargs.model']=str(ocr_model)
+
     if parallel is not None:
         # 如果使用gpu，将需要更大的内存
         for n in ["ocr", "layout", "formula", "table"]:
@@ -415,6 +427,9 @@ def parse(
     if pages:
         params.pagenos = _parse_pages(pages)
     
+
+    if feature:
+        params.features=[f.strip() for f in feature.split(',')]
 
     # if remove_watermark is not None:
     # params.remove_watermark=remove_watermark

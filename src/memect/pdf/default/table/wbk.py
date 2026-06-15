@@ -3,20 +3,25 @@ from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
 from typing import Any, Callable, Final, Literal, Sequence
 
+from memect.base import lists
 from memect.base.bbox import BBox
 from memect.base.debug import XDebugger
 from memect.base.matrix import Matrix
 from memect.pdf.base import (
+    KBlock,
     KCell,
+    KChar,
     KDocument,
     KLine,
+    KObject,
     KPage,
     KTable,
+    KText,
     VObject,
 )
 from memect.pdf.model import ModelManager
 
-from .filler import TableFiller
+from .filler import Result, TableFiller
 from .ybk import YBKMode
 
 
@@ -79,6 +84,81 @@ class Parser:
         self._table.parse(doc, self._table_key, handler=get_tables)
         self._do(parse_page, doc.working_pages, max_workers=max_workers)
 
+    def parse_one(self,page:KPage,bbox:BBox,*,use_vobj:bool=False,use_char:bool=True,add:bool=False,clear:bool=False,name:str='custom',index:int=0)->KTable:
+        """把页面的指定区域解析为无边框表格
+        page:
+        bbox:
+        use_vobj: True表示使用vobjects，False使用page.objects
+        use_char:True 表示使用字符对象
+        add:True 表示添加到page.objects
+        clear:True 表示清除bbox区域的对象
+        name: 调试的图片的文件名
+        index: 调试的图片的序号
+        """
+        debugger = self._debugger.bind(page=page.number)
+        steps: list[Any]|None = None
+        if debugger.allow('draw'):
+            steps=[]
+
+        img = page.crop(bbox)
+        assert img is not None
+        model_result = self._table.execute([img])[0]
+        if use_vobj:
+            #如果没有figures/formulas，两种做法没有什么不同
+            #如果有，只是多创建了图片文件等，不影响其他
+            vobjs = bbox.get(page.vobjects,ratio=0.8)
+            result = TableFiller().get_objects(vobjs)
+            table = self._parse_wbk(page,bbox,model_result,result=result)
+            if clear:
+                bbox.get(page.objects,ratio=0.7,remove=True)
+            if add:
+                page.objects.append(table)
+        else:
+            objects:list[KObject]=[]
+            chars:list[KChar]=[]
+            used_objects:list[KObject]=[]
+            for obj in bbox.get(page.objects,ratio=0.8):
+                used_objects.append(obj)
+                if use_char and isinstance(obj,KText):
+                    if len(obj.objects)==len(obj.chars):
+                        #多数情况下都是文本，除非有行内图片或者公式
+                        chars.extend(obj.chars)
+                    else:
+                        for a in obj.objects:
+                            if isinstance(a,KChar):
+                                chars.append(a)
+                            else:
+                                objects.append(a)
+                else:
+                    objects.append(obj)
+            
+            result = Result(chars=chars,objects=objects)
+            table = self._parse_wbk(page,bbox,model_result,result=result)
+            if len(used_objects)>0:
+                if add:
+                    i=page.objects.index(used_objects[0])
+                    page.objects.insert(i,table)
+                if clear:
+                    lists.remove(page.objects,used_objects,use_is=True)
+
+        result = table.cache.pop("result", None)
+        result = TableFiller().fill(table, result)
+        if steps is not None:
+            steps.append((f"remain_objects={len(result.remain_objects)}",result.remain_objects))
+            steps.append((f"{table.subtype}", table.get_lines2()))
+            #TODO 如何获得文件名？
+            page.draw(
+                *steps,
+                index=index,
+                dir=f"debug/default/wbk/{name}",
+                show_type=False,
+                line_width=4,
+            )
+
+        return table
+
+        
+
     def _parse_page(self, page: KPage, mode: WBKMode):
         i = 0
         for vobj in page.vobjects:
@@ -140,7 +220,7 @@ class Parser:
         steps: list[Any]|None = None
         if debugger.allow('draw'):
             steps=[]
-        wbk_table = self._parse_wbk(page, index, vobj,steps=steps)
+        wbk_table = self._parse_wbk(page,vobj.bbox,vobj.cache.pop(self._table_key,None),vobject=vobj,steps=steps)
         table = wbk_table
         beautify = True
         ybk_table:KTable|None=None
@@ -168,7 +248,7 @@ class Parser:
             #去掉前后空白行再比较，因为可能对象识别的bbox过大，把外部的文本包含了部分（如：一半）
             #这个时候就可以再次切换回来使用有边框
             self._logger.warning('第%s页，去掉空白行/列，从wbk切换回ybk,bbox=%s',table.page.number,table.bbox)
-            result=TableFiller().fill(ybk_table,result)
+            result=TableFiller().fill(ybk_table,ybk_table.cache.pop('result'))
             table=ybk_table
             beautify=False
         elif table is wbk_table:
@@ -204,21 +284,27 @@ class Parser:
             page, index, vobj, fill=False, mode=YBKMode.PDF
         )
 
+    
     def _parse_wbk(
-        self, page: KPage, index: int, vobj: VObject, steps: list[Any]|None=None
+        self, page: KPage,bbox:BBox,model_result:Any,*,result:Result|None=None,vobject: VObject|None=None, steps: list[Any]|None=None
     ) -> KTable:
         #debugger = self._debugger.bind(page=page.number)
-        bbox = vobj.bbox
-        cells = self._get_cells_by_model(page, index, vobj)
+        
+        cells = self._convert_cells(page,bbox,model_result)
         raw_cells: Final = [c.bbox for c in cells]
         # 避免重叠
         cells = self._adjust_cells(cells)
         adjusted_cells:Final=[c.bbox for c in cells]
-        result = TableFiller().get_objects(vobj)
+        if result is None:
+            #表示根据vobject创建，这个时候，该区域还没有其他对象(page.objects)
+            assert vobject is not None
+            result = TableFiller().get_objects([vobject])
         chars=list(result.chars[:])
         self._expand_cells(cells, chars, [0.7, 0.5])
         self._expand_cells(cells, list(result.pdf_figures), [0.7, 0.5])
         self._expand_cells(cells, list(result.vobjects), [0.7, 0.5])
+        self._expand_cells(cells,list(result.objects),[0.8])
+
         #有时候识别的区域过小，丢失一部分字符，这里再次纠正
         #self._expand_cells(cells,chars,[0.7],dx=10,dy=0)
         expanded_cells:Final=[c.bbox for c in cells]
@@ -228,7 +314,7 @@ class Parser:
         if cells:
             bbox = BBox.join2(cells)
         table = Builder().make_table(page,bbox,cells)
-        table.vobject = vobj
+        table.vobject = vobject
         table.subtype = "wbk"
         table.cache["result"] = result
 
@@ -236,7 +322,7 @@ class Parser:
             steps.extend(
                 [
                     ("page", None),
-                    ("table", [vobj]),
+                    ("table", [bbox]),
                     (f"pdf_chars={len(result.pdf_chars)}", result.chars),
                     (f"ocr_chars={len(result.ocr_chars)}", result.ocr_chars),
                     (f"removed_chars={len(result.removed_chars)}",result.removed_chars),
@@ -274,15 +360,12 @@ class Parser:
                     break
 
 
-    def _get_cells_by_model(self, page: KPage, index: int, vobj: VObject) -> list[_Cell]:
-        # debugger = self._debugger.bind(page=page.number)
-        bbox = vobj.bbox
-        result = vobj.cache.pop(self._table_key, None)
+    def _convert_cells(self,page:KPage,bbox:BBox,result:Any):
+        # 获得的结果是相对截图的，还需要进行转化
         if not result:
             # 表示无法截图？
-            return [_Cell(vobj.bbox)]
-
-        # 获得的结果是相对截图的，还需要进行转化
+            return [_Cell(bbox)]
+        
         width = result["width"]
         height = result["height"]
         # 转化为相对页面的坐标，
@@ -293,7 +376,7 @@ class Parser:
         m = Matrix().lt_to_lb((width, height)).scale(sw, sh).translate(tx, ty)
         cells: list[_Cell] = []
         for cell_bbox in result["cells"]:
-            xb = vobj.bbox.intersect(BBox.from_list(cell_bbox, matrix=m))
+            xb = bbox.intersect(BBox.from_list(cell_bbox, matrix=m))
             if xb is not None: 
                 cells.append(_Cell(xb))
         return cells

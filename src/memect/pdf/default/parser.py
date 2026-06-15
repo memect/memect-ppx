@@ -34,6 +34,7 @@ from memect.pdf.base import (
     KPDFFigure,
     KPage,
     KSpan,
+    KTable,
     KText,
     OCRMode,
     PageType,
@@ -42,6 +43,7 @@ from memect.pdf.base import (
 )
 from memect.pdf.commons import FileInfo
 from memect.pdf.default.block import BlockParser
+from memect.pdf.default.feature import FeatureParser
 from memect.pdf.default.other import OtherParser
 from memect.pdf.model import ModelManager
 from memect.pdf.sort import Sorter
@@ -75,6 +77,8 @@ class DefaultParserArgs(MyBaseModel):
     llm: str = "llm"
     # image: ImageParserArgs = Field(default_factory=ImageParserArgs)
     pdf: PdfParserArgs = Field(default_factory=PdfParserArgs)
+
+    features:dict[str,Any]=Field(default_factory=dict)
 
 class _A(Protocol):
     _logger:logging.Logger
@@ -122,6 +126,8 @@ class DefaultParser:
         self._footnote_parser: Final = PageFootnoteParser()
         self._block_parser:Final = BlockParser()
 
+        self._feature_parser:Final = FeatureParser(self._args.features)
+
     def parse(self, doc: KDocument):
         timer = utils.Timer.start()
 
@@ -139,6 +145,7 @@ class DefaultParser:
         self._parse_tables(doc)
         if doc.params.mode == ParseMode.PPT:
             # 如果是按ppt，就不需要解析页面页脚等了
+            self._feature_parser.parse(doc)
             self._sort_ppt(doc)
         else:
             # 按页解析即可
@@ -147,6 +154,8 @@ class DefaultParser:
             self._footer_parser.parse(doc)
             self._footnote_parser.parse(doc)
             self._block_parser.parse(doc)
+            #处理features
+            self._feature_parser.parse(doc)
             self._sort(doc)
             #TODO 再考虑跨栏/跨页的情况，对齐表格，或者把某些文本转换为表格
             #因为后续章节树分析，合并跨页表格需要
@@ -694,4 +703,25 @@ class DefaultParser:
         self._do(parse_page, doc.working_pages, max_workers=max_workers)
 
 
+    @log
+    def _parse_table_styles(self,doc:KDocument,max_workers:int=0):
+
+        for page in doc.working_pages:
+            for table in page.objects:
+                if isinstance(table,KTable):
+                    #如果是用来布局的表格，就不需要识别背景颜色了，当然识别也不影响，忽略即可
+                    #识别表格行列颜色，主要如下
+                    #表头颜色（1-n行，如果有跨行的单于格）
+                    #表体颜色，典型的为斑马线格式，按行（多数）或者按列（少数）
+                    #如果单元格跨行，整个单元格显示的都是相同的颜色
+
+                    #理论上可以设置每一个单元格的颜色，但是目前仅仅支持如下：
+                    #表头：前面几行颜色
+                    #表体：要么按行，要么按列，颜色交替
+
+                    #在word中，使用table style的时候，只能够设置一个表头，然后交替行/列
+                    #换句话说，如果有2个不同颜色的表头，可能原文就是使用2个表格设置的，只是粘连在一起
+                    #结构，内容类似，解析的时候，作为一个表格也是合理的 
+                    pass
+        pass
 

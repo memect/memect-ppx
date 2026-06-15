@@ -86,6 +86,9 @@ class BlockParser:
             r"(表|图|图表)[0-9]+.+",
             r"(表|图|图表)[一二三四五六七八九十]+.+",
             r"(表|图|图表)[:].+",
+
+            #2017年我国地下水水质情况
+            r'[0-9]{4}年.+情况',
         ],
     )
     _title_pattern2: Final = XPattern(
@@ -1217,19 +1220,3 @@ class BlockParser:
 
 
 
-class _Parser1:
-
-    def __init__(self):
-        super().__init__()
-
-class _Parser2:
-    """研报首页的页头部分内容杂乱无章，可以先分成一个block，避免影响阅读顺序"""
-    def __init__(self):
-        super().__init__()
-    
-    def parse(self,doc:KDocument):
-        #TODO 可以使用一个小模型来解决？
-        for page in doc.working_pages:
-            if page.number==1:
-                pass
-        pass
