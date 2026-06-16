@@ -800,6 +800,8 @@ class OCRModel(Model):
         bbox: np.ndarray,
         padding: int = 1,
     ) -> np.ndarray:
+        
+        #bbox的区域可能大了一点，包含了单元格的边界线，导致认为也是笔画，无法计算更精确的字符区域，导致该字符的区域过大
         x, y, w, h = cv2.boundingRect(bbox.astype(np.float32))
         roi = image[y:y+h, x:x+w]
 
@@ -867,7 +869,6 @@ class OCRModel(Model):
 
         x1, y1 = x + rx,      y + ry
         x2, y2 = x + rx + rw, y + ry + rh
-
         return np.array([[x1,y1],[x2,y1],[x2,y2],[x1,y2]], dtype=np.float32)
 
 

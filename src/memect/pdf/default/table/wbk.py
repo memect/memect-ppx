@@ -384,6 +384,22 @@ class Parser:
     def _adjust_cells(self, cells: Sequence[_Cell]) -> list[_Cell]:
         # 先删除完全包含的？
 
+        def get_overlapped_cell(c1:_Cell,cells:Sequence[_Cell],start:int)->tuple[_Cell,BBox]|None:
+            overlapped_cells:list[tuple[_Cell,BBox]]=[]
+            for i in range(start,len(cells)):
+                c2 = cells[i]
+                if c2.bbox.y1<=c1.bbox.y0:
+                    break
+                xa = c1.bbox.intersect(c2.bbox)
+                if xa and xa.area>0:
+                    overlapped_cells.append((c2,xa))
+            
+            if not overlapped_cells:
+                return None
+            
+            overlapped_cells.sort(key=lambda item:item[1].area,reverse=True)
+            return overlapped_cells[0]
+        
         def clean_cells(cells: Sequence[_Cell]) -> list[_Cell]:
             cells = list(cells)
             cells.sort(key=lambda cell: cell.bbox.y1, reverse=True)
@@ -397,10 +413,20 @@ class Parser:
                     if c2.y1 <= c1.y0:
                         break
                     xb = c1.intersect(c2)
-                    # 已经按面积排序，所以不需要再比较哪一个面积更大
+                    #简单的部分重叠，删除小的，保留大的
+                    #如果大的又和其他的部分重叠，这个时候，删除大的更好
                     if xb and xb.area / min(c1.area, c2.area) >= 0.7:
                         if c1.area > c2.area:
-                            del cells[j]
+                            item1 = get_overlapped_cell(cells[i],cells,j+1)
+                            item2 = get_overlapped_cell(cells[j],cells,j+1)
+                            if item1 and (not item2 or item1[1].area>item2[1].area):
+                                #如果大的还有其他重叠，小的没有
+                                del cells[i]
+                                c1_removed=True
+                                break
+                            else:
+                                #删除小的
+                                del cells[j]
                         else:
                             del cells[i]
                             c1_removed = True
@@ -418,7 +444,7 @@ class Parser:
 
 
 
-    def _adjust_items(self, cells: Sequence[_Cell]):
+    def _adjust_items2(self, cells: Sequence[_Cell]):
         # debugger=self._debugger.bind(page=self.table.pages[0].number)
         strict = False
 
@@ -451,7 +477,9 @@ class Parser:
                         #  [--c2--]
                         # 水平重叠的多，调整y
                         if c1.bbox.height > c2.bbox.height:
+                            print('=====>KK',c1.bbox,c2.bbox)
                             c1.bbox = c1.bbox.adjust(y0=c2.bbox.y1 + 1)
+                            print('=====>k2',c1.bbox,c2.bbox)
                         else:
                             c2.bbox = c2.bbox.adjust(y1=c1.bbox.y0 - 1)
                     else:
@@ -474,6 +502,130 @@ class Parser:
         adjust(cells)
 
 
+    def _adjust_items(self,cells:Sequence[_Cell]):
+        def has_overlap(b1: BBox, b2: BBox) -> bool:
+            xb = b1.intersect(b2)
+            return xb is not None and xb.width > 0 and xb.height > 0
+
+        def valid_bbox(bbox: BBox) -> bool:
+            return bbox.width > 0 and bbox.height > 0
+
+        def apply_plan(plan: list[tuple[_Cell, BBox]]):
+            for cell, bbox in plan:
+                cell.bbox = bbox
+
+        def plan_cost(plan: list[tuple[_Cell, BBox]]) -> tuple[int, float, float, int]:
+            changed = [(cell, bbox) for cell, bbox in plan if cell.bbox != bbox]
+            total_loss = sum(max(cell.bbox.area - bbox.area, 0) for cell, bbox in changed)
+            relative_loss = sum(
+                max(cell.bbox.area - bbox.area, 0) / max(cell.bbox.area, 1)
+                for cell, bbox in changed
+            )
+            real_changed = sum(0 if cell.generated else 1 for cell, _ in changed)
+            return real_changed, relative_loss, total_loss, len(changed)
+
+        def add_plan(
+            plans: list[list[tuple[_Cell, BBox]]],
+            c1: _Cell,
+            c2: _Cell,
+            changes: list[tuple[_Cell, BBox]],
+        ):
+            b1 = c1.bbox
+            b2 = c2.bbox
+            for cell, bbox in changes:
+                if not valid_bbox(bbox):
+                    return
+                if cell is c1:
+                    b1 = bbox
+                elif cell is c2:
+                    b2 = bbox
+            if not has_overlap(b1, b2):
+                plans.append(changes)
+
+        def axis_plans(c1: _Cell, c2: _Cell, axis: Literal["x", "y"]):
+            plans: list[list[tuple[_Cell, BBox]]] = []
+            if axis == "y":
+                upper, lower = (c1, c2) if c1.bbox.cy >= c2.bbox.cy else (c2, c1)
+                add_plan(
+                    plans,
+                    c1,
+                    c2,
+                    [(upper, upper.bbox.adjust(y0=lower.bbox.y1))],
+                )
+                add_plan(
+                    plans,
+                    c1,
+                    c2,
+                    [(lower, lower.bbox.adjust(y1=upper.bbox.y0))],
+                )
+                cut = (upper.bbox.y0 + lower.bbox.y1) / 2
+                add_plan(
+                    plans,
+                    c1,
+                    c2,
+                    [
+                        (upper, upper.bbox.adjust(y0=cut)),
+                        (lower, lower.bbox.adjust(y1=cut)),
+                    ],
+                )
+            else:
+                left, right = (c1, c2) if c1.bbox.cx <= c2.bbox.cx else (c2, c1)
+                add_plan(
+                    plans,
+                    c1,
+                    c2,
+                    [(left, left.bbox.adjust(x1=right.bbox.x0))],
+                )
+                add_plan(
+                    plans,
+                    c1,
+                    c2,
+                    [(right, right.bbox.adjust(x0=left.bbox.x1))],
+                )
+                cut = (left.bbox.x1 + right.bbox.x0) / 2
+                add_plan(
+                    plans,
+                    c1,
+                    c2,
+                    [
+                        (left, left.bbox.adjust(x1=cut)),
+                        (right, right.bbox.adjust(x0=cut)),
+                    ],
+                )
+            return plans
+
+        def best_plan(c1: _Cell, c2: _Cell, area: BBox):
+            min_width = min(c1.bbox.width, c2.bbox.width)
+            min_height = min(c1.bbox.height, c2.bbox.height)
+            if min_width <= 0 or min_height <= 0:
+                return None
+            x_ratio = area.width / min_width
+            y_ratio = area.height / min_height
+            axes: tuple[Literal["x", "y"], Literal["x", "y"]]
+            axes = ("y", "x") if x_ratio >= y_ratio else ("x", "y")
+
+            plans: list[list[tuple[_Cell, BBox]]] = []
+            for axis in axes:
+                plans.extend(axis_plans(c1, c2, axis))
+            if not plans:
+                return None
+            return min(plans, key=plan_cost)
+
+        cells = sorted(cells, key=lambda cell: cell.bbox.y1, reverse=True)
+        for i, c1 in enumerate(cells):
+            if not valid_bbox(c1.bbox):
+                continue
+            for c2 in cells[i + 1 :]:
+                if c2.bbox.y1 <= c1.bbox.y0:
+                    break
+                if not valid_bbox(c2.bbox):
+                    continue
+                area = c1.bbox.intersect(c2.bbox)
+                if area is None or area.width <= 0 or area.height <= 0:
+                    continue
+                plan = best_plan(c1, c2, area)
+                if plan is not None:
+                    apply_plan(plan)
 
     def _beautify(self, table: KTable):
         pass
