@@ -10,6 +10,8 @@ from typing import Any
 from lxml import etree
 
 from .model import (
+    Caption,
+    DocumentDefaults,
     DocumentProperties,
     Footnote,
     FootnoteReference,
@@ -24,6 +26,8 @@ from .model import (
     Section,
     Table,
     TableCell,
+    TableOfContents,
+    TableOfFigures,
 )
 from .opc import Package
 from .errors import ValidationError
@@ -113,6 +117,52 @@ def _xml(root: etree._Element) -> bytes:
     return etree.tostring(root, encoding="UTF-8", xml_declaration=True, standalone=True)
 
 
+def _document_has_dynamic_fields(document: Any) -> bool:
+    for section in document.sections:
+        if _blocks_have_dynamic_fields(section.blocks):
+            return True
+        header_footers = (
+            section.header,
+            section.footer,
+            section.first_header,
+            section.first_footer,
+            section.even_header,
+            section.even_footer,
+        )
+        if any(_blocks_have_dynamic_fields(header_footer.blocks) for header_footer in header_footers):
+            return True
+    return any(_blocks_have_dynamic_fields(footnote.blocks) for footnote in document.footnotes)
+
+
+def _blocks_have_dynamic_fields(blocks: list[Any]) -> bool:
+    for block in blocks:
+        if isinstance(block, (Caption, TableOfContents, TableOfFigures)):
+            return True
+        if isinstance(block, Table) and _table_has_dynamic_fields(block):
+            return True
+    return False
+
+
+def _table_has_dynamic_fields(table: Table) -> bool:
+    seen: set[int] = set()
+    for row in table.rows:
+        for cell in row.cells:
+            identity = id(cell)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if _blocks_have_dynamic_fields(cell.blocks):
+                return True
+    for cell in table.cells:
+        identity = id(cell)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if _blocks_have_dynamic_fields(cell.blocks):
+            return True
+    return False
+
+
 class _Serializer:
     def __init__(self, document: Any) -> None:
         self.document = document
@@ -125,6 +175,7 @@ class _Serializer:
             or section.even_footer.has_content()
             for section in document.sections
         )
+        self._has_dynamic_fields = _document_has_dynamic_fields(document)
 
     def build(self) -> bytes:
         root_rels = self.package.relationships()
@@ -239,6 +290,12 @@ class _Serializer:
             return self._paragraph_xml(block, source_part)
         if isinstance(block, Table):
             return self._table_xml(block, source_part)
+        if isinstance(block, TableOfContents):
+            return self._toc_xml(block, source_part)
+        if isinstance(block, Caption):
+            return self._caption_xml(block)
+        if isinstance(block, TableOfFigures):
+            return self._table_of_figures_xml(block, source_part)
         raise TypeError(f"Unsupported document block: {type(block)!r}")
 
     def _paragraph_xml(self, paragraph: Paragraph, source_part: str) -> etree._Element:
@@ -260,6 +317,105 @@ class _Serializer:
             else:
                 raise TypeError(f"Unsupported inline object: {type(inline)!r}")
         return p
+
+    def _toc_xml(self, toc: TableOfContents, source_part: str) -> etree._Element:
+        sdt = _w("sdt")
+        sdt_pr = _sub(sdt, "sdtPr")
+        doc_part_obj = _sub(sdt_pr, "docPartObj")
+        _sub(doc_part_obj, "docPartGallery", {"w:val": "Table of Contents"})
+        _sub(doc_part_obj, "docPartUnique")
+        content = _sub(sdt, "sdtContent")
+
+        if toc.title:
+            title = Paragraph(style=toc.title_style)
+            title.add_run(toc.title)
+            content.append(self._paragraph_xml(title, source_part))
+        content.append(self._toc_field_paragraph_xml(toc))
+        return sdt
+
+    def _toc_field_paragraph_xml(self, toc: TableOfContents) -> etree._Element:
+        p = _w("p")
+        self._append_complex_field_runs(
+            p,
+            instruction=_toc_instruction(toc),
+            placeholder="Update table of contents",
+            dirty=toc.dirty,
+        )
+        return p
+
+    def _caption_xml(self, caption: Caption) -> etree._Element:
+        p = _w("p")
+        if caption.style:
+            p_pr = self._paragraph_properties_xml(Paragraph(style=caption.style))
+            if p_pr is not None:
+                p.append(p_pr)
+        prefix = f"{caption.label}{caption.separator}" if caption.label else ""
+        if prefix:
+            run = _sub(p, "r")
+            self._append_text(run, prefix)
+        self._append_complex_field_runs(
+            p,
+            instruction=_caption_instruction(caption),
+            placeholder="1",
+            dirty=caption.dirty,
+        )
+        if caption.text:
+            run = _sub(p, "r")
+            self._append_text(run, f"{caption.separator}{caption.text}")
+        return p
+
+    def _table_of_figures_xml(self, table: TableOfFigures, source_part: str) -> etree._Element:
+        sdt = _w("sdt")
+        sdt_pr = _sub(sdt, "sdtPr")
+        doc_part_obj = _sub(sdt_pr, "docPartObj")
+        _sub(doc_part_obj, "docPartGallery", {"w:val": "Table of Figures"})
+        _sub(doc_part_obj, "docPartUnique")
+        content = _sub(sdt, "sdtContent")
+
+        if table.title:
+            title = Paragraph(style=table.title_style)
+            title.add_run(table.title)
+            content.append(self._paragraph_xml(title, source_part))
+        content.append(self._table_of_figures_field_paragraph_xml(table))
+        return sdt
+
+    def _table_of_figures_field_paragraph_xml(self, table: TableOfFigures) -> etree._Element:
+        p = _w("p")
+        self._append_complex_field_runs(
+            p,
+            instruction=_table_of_figures_instruction(table),
+            placeholder="Update table of figures",
+            dirty=table.dirty,
+        )
+        return p
+
+    def _append_complex_field_runs(
+        self,
+        paragraph: etree._Element,
+        *,
+        instruction: str,
+        placeholder: str,
+        dirty: bool,
+    ) -> None:
+        begin_run = _sub(paragraph, "r")
+        begin_attrs = {"w:fldCharType": "begin"}
+        if dirty:
+            begin_attrs["w:dirty"] = "true"
+        _sub(begin_run, "fldChar", begin_attrs)
+
+        instruction_run = _sub(paragraph, "r")
+        instruction_xml = _sub(instruction_run, "instrText")
+        instruction_xml.set(f"{{{XML_NS}}}space", "preserve")
+        instruction_xml.text = _clean_text(instruction)
+
+        separate_run = _sub(paragraph, "r")
+        _sub(separate_run, "fldChar", {"w:fldCharType": "separate"})
+
+        placeholder_run = _sub(paragraph, "r")
+        self._append_text(placeholder_run, placeholder)
+
+        end_run = _sub(paragraph, "r")
+        _sub(end_run, "fldChar", {"w:fldCharType": "end"})
 
     def _paragraph_properties_xml(self, paragraph: Paragraph) -> etree._Element | None:
         p_pr = _w("pPr")
@@ -475,10 +631,13 @@ class _Serializer:
         for width in _grid_col_widths(table, layout):
             _sub(grid, "gridCol", {"w:w": str(width)})
 
-        for layout_row in layout.rows:
+        for row_index, layout_row in enumerate(layout.rows):
             tr = _sub(tbl, "tr")
-            if layout_row.height is not None:
+            if layout_row.height is not None or row_index < table.repeat_header_rows:
                 tr_pr = _sub(tr, "trPr")
+                if row_index < table.repeat_header_rows:
+                    _sub(tr_pr, "tblHeader")
+            if layout_row.height is not None:
                 _sub(tr_pr, "trHeight", {"w:val": to_twips(layout_row.height, default_unit="pt")})
             for entry in layout_row.entries:
                 tr.append(self._cell_xml(entry, source_part))
@@ -503,6 +662,8 @@ class _Serializer:
         blocks = cell.blocks or [Paragraph()]
         for block in blocks:
             tc.append(self._block_xml(block, source_part))
+        if blocks and isinstance(blocks[-1], Table):
+            tc.append(self._paragraph_xml(Paragraph(), source_part))
         return tc
 
     def _section_xml(
@@ -556,7 +717,7 @@ class _Serializer:
 
     def _styles_xml(self) -> bytes:
         root = _w("styles", nsmap={"w": NS["w"]})
-        root.append(_doc_defaults_xml())
+        root.append(_doc_defaults_xml(self.document.defaults))
         for style in _builtin_styles():
             root.append(self._style_xml(style))
         root.append(_table_normal_style_xml())
@@ -585,6 +746,8 @@ class _Serializer:
                 space_after=style.space_after,
             )
             self._append_paragraph_format(p_pr, fmt)
+            if style.outline_level is not None:
+                _sub(p_pr, "outlineLvl", {"w:val": style.outline_level})
             if len(p_pr):
                 node.append(p_pr)
 
@@ -648,6 +811,8 @@ class _Serializer:
         root = _w("settings", nsmap={"w": NS["w"]})
         _sub(root, "zoom", {"w:percent": "100"})
         _sub(root, "defaultTabStop", {"w:val": "720"})
+        if self._has_dynamic_fields:
+            _sub(root, "updateFields", {"w:val": "true"})
         if self._use_even_odd_headers:
             _sub(root, "evenAndOddHeaders")
         compat = _sub(root, "compat")
@@ -705,25 +870,53 @@ class _Serializer:
         return _xml(root)
 
 
-def _doc_defaults_xml() -> etree._Element:
+def _doc_defaults_xml(defaults: DocumentDefaults) -> etree._Element:
     doc_defaults = _w("docDefaults")
     r_pr_default = _sub(doc_defaults, "rPrDefault")
     r_pr = _sub(r_pr_default, "rPr")
-    _sub(
-        r_pr,
-        "rFonts",
-        {
-            "w:ascii": "Times New Roman",
-            "w:hAnsi": "Times New Roman",
-            "w:eastAsia": "SimSun",
-        },
-    )
-    _sub(r_pr, "sz", {"w:val": "22"})
-    _sub(r_pr, "szCs", {"w:val": "22"})
+    font_attrs = {
+        "w:ascii": defaults.font,
+        "w:hAnsi": defaults.font,
+        "w:cs": defaults.font,
+        "w:eastAsia": defaults.east_asia_font,
+    }
+    _sub(r_pr, "rFonts", font_attrs)
+    size = to_half_points(defaults.size)
+    if size is not None:
+        _sub(r_pr, "sz", {"w:val": size})
+        _sub(r_pr, "szCs", {"w:val": size})
+    if defaults.color:
+        _sub(r_pr, "color", {"w:val": _color(defaults.color)})
     p_pr_default = _sub(doc_defaults, "pPrDefault")
     p_pr = _sub(p_pr_default, "pPr")
     _sub(p_pr, "spacing", {"w:after": "160", "w:line": "259", "w:lineRule": "auto"})
     return doc_defaults
+
+
+def _toc_instruction(toc: TableOfContents) -> str:
+    start_level, end_level = toc.levels
+    parts = [f'TOC \\o "{start_level}-{end_level}"']
+    if toc.hyperlink:
+        parts.append("\\h")
+    if toc.hide_page_numbers_in_web:
+        parts.append("\\z")
+    if toc.use_outline_levels:
+        parts.append("\\u")
+    return " ".join(parts)
+
+
+def _caption_instruction(caption: Caption) -> str:
+    return f"SEQ {caption.sequence} \\* {caption.numbering_format}"
+
+
+def _table_of_figures_instruction(table: TableOfFigures) -> str:
+    parts = ["TOC"]
+    if table.hyperlink:
+        parts.append("\\h")
+    if table.hide_page_numbers_in_web:
+        parts.append("\\z")
+    parts.append(f'\\c "{table.sequence}"')
+    return " ".join(parts)
 
 
 def _builtin_styles() -> list[ParagraphStyle]:
@@ -731,9 +924,14 @@ def _builtin_styles() -> list[ParagraphStyle]:
         ParagraphStyle("Normal", "Normal"),
         ParagraphStyle("Title", "Title", size=26, bold=True, alignment="center", space_after=12),
         ParagraphStyle("Subtitle", "Subtitle", size=15, color="666666", alignment="center", space_after=12),
-        ParagraphStyle("Heading1", "heading 1", size=20, bold=True, space_before=12, space_after=6),
-        ParagraphStyle("Heading2", "heading 2", size=16, bold=True, space_before=10, space_after=4),
-        ParagraphStyle("Heading3", "heading 3", size=14, bold=True, space_before=8, space_after=4),
+        ParagraphStyle("Heading1", "heading 1", size=20, bold=True, space_before=12, space_after=6, outline_level=0),
+        ParagraphStyle("Heading2", "heading 2", size=16, bold=True, space_before=10, space_after=4, outline_level=1),
+        ParagraphStyle("Heading3", "heading 3", size=14, bold=True, space_before=8, space_after=4, outline_level=2),
+        ParagraphStyle("TOCHeading", "TOC Heading", size=16, bold=True, space_before=12, space_after=6),
+        ParagraphStyle("TOC1", "toc 1", space_after=0),
+        ParagraphStyle("TOC2", "toc 2", space_after=0),
+        ParagraphStyle("TOC3", "toc 3", space_after=0),
+        ParagraphStyle("Caption", "caption", size=9, italic=True, color="666666", space_after=6),
         ParagraphStyle("Quote", "Quote", italic=True, color="666666", space_before=6, space_after=6),
         ParagraphStyle("Code", "Code", font="Consolas", east_asia_font="Consolas", size=10, space_after=4),
         ParagraphStyle("FootnoteText", "footnote text", size=10, space_after=0),

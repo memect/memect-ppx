@@ -24,6 +24,14 @@ _PAGE_NUMBER_PLACEHOLDERS: dict[str, PageFieldKind] = {
 
 
 @dataclass
+class DocumentDefaults:
+    font: str = "Times New Roman"
+    east_asia_font: str = "SimSun"
+    size: Length | int | float = 11
+    color: str | None = None
+
+
+@dataclass
 class RunStyle:
     style: str | None = None
     font: str | None = None
@@ -73,6 +81,14 @@ class Picture:
 
 
 @dataclass
+class _PendingPicture:
+    source: str | Path | bytes
+    width: Length | int | float | None = None
+    height: Length | int | float | None = None
+    alt_text: str = ""
+
+
+@dataclass
 class FootnoteReference:
     footnote_id: int
 
@@ -82,7 +98,7 @@ class PageField:
     kind: PageFieldKind = "PAGE"
 
 
-Inline = Run | Picture | FootnoteReference | PageField
+Inline = Run | Picture | _PendingPicture | FootnoteReference | PageField
 
 
 @dataclass
@@ -218,6 +234,7 @@ class TableCell:
     col_index: int | None = None
     shading: str | None = None
     vertical_align: VerticalAlignment | None = None
+    document: Any | None = field(default=None, repr=False, compare=False)
 
     def add_paragraph(
         self,
@@ -229,6 +246,7 @@ class TableCell:
         paragraph = Paragraph(style=style, format=ParagraphFormat(alignment=alignment))
         if text:
             paragraph.add_run(text)
+        paragraph.document = self.document
         self.blocks.append(paragraph)
         return paragraph
 
@@ -236,6 +254,81 @@ class TableCell:
         self.blocks.clear()
         return self.add_paragraph(text, style=style)
 
+    def add_table(
+        self,
+        rows: int | None = None,
+        cols: int | None = None,
+        *,
+        data: list[list[Any]] | None = None,
+        cells: list[TableCell] | None = None,
+        style: str | None = "TableGrid",
+        alignment: Alignment | None = None,
+        borders: bool = True,
+    ) -> Table:
+        table = _create_table(
+            rows=rows,
+            cols=cols,
+            data=data,
+            cells=cells,
+            style=style,
+            alignment=alignment,
+            borders=borders,
+            document=self.document,
+        )
+        self.blocks.append(table)
+        return table
+
+    def add_picture(
+        self,
+        source: str | Path | bytes,
+        *,
+        width: Length | int | float | None = None,
+        height: Length | int | float | None = None,
+        alt_text: str = "",
+        alignment: Alignment | None = None,
+    ) -> Paragraph:
+        paragraph = self.add_paragraph(alignment=alignment)
+        if self.document is None:
+            paragraph.inlines.append(
+                _PendingPicture(
+                    source=source,
+                    width=width,
+                    height=height,
+                    alt_text=alt_text,
+                )
+            )
+        else:
+            picture = self.document.create_picture(
+                source,
+                width=width,
+                height=height,
+                alt_text=alt_text,
+            )
+            paragraph.add_picture(picture)
+        return paragraph
+
+    def add_caption(
+        self,
+        text: str,
+        *,
+        label: str = "Figure",
+        sequence: str = "Figure",
+        separator: str = " ",
+        style: str | None = "Caption",
+        numbering_format: str = "ARABIC",
+        dirty: bool = True,
+    ) -> Caption:
+        caption = _create_caption(
+            text=text,
+            label=label,
+            sequence=sequence,
+            separator=separator,
+            style=style,
+            numbering_format=numbering_format,
+            dirty=dirty,
+        )
+        self.blocks.append(caption)
+        return caption
 
 
 
@@ -256,6 +349,8 @@ class Table:
     cells: list[TableCell] = field(default_factory=list)
     row_count: int = 0
     col_count: int = 0
+    repeat_header_rows: int = 0
+    document: Any | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create(
@@ -290,6 +385,14 @@ class Table:
     def cell(self, row: int, col: int) -> TableCell:
         return self.rows[row].cells[col]
 
+    def set_repeat_header_rows(self, count: int = 1) -> Table:
+        if count < 0:
+            raise ValueError("repeat header row count cannot be negative")
+        if count > len(self.rows):
+            raise ValueError("repeat header row count exceeds table row count")
+        self.repeat_header_rows = count
+        return self
+
     def add_cell(
         self,
         *,
@@ -310,6 +413,7 @@ class Table:
             shading=shading,
             vertical_align=vertical_align,
         )
+        cell.document = self.document
         self.cells.append(cell)
         self.rows = _materialize_explicit_table_rows(
             row_count=self.row_count or len(self.rows),
@@ -317,6 +421,7 @@ class Table:
             cells=self.cells,
             existing_rows=self.rows,
         )
+        _attach_table_document(self, self.document)
         return cell
 
 
@@ -371,6 +476,76 @@ def _materialize_explicit_table_rows(
     return rows
 
 
+def _create_table(
+    *,
+    rows: int | None,
+    cols: int | None,
+    data: list[list[Any]] | None,
+    cells: list[TableCell] | None,
+    style: str | None,
+    alignment: Alignment | None,
+    borders: bool,
+    document: Any | None,
+) -> Table:
+    if data is not None and cells is not None:
+        raise ValueError("data and cells cannot be used together")
+    if cells is not None and (rows is None or cols is None):
+        raise ValueError("rows and cols are required when cells are provided")
+    if data is not None:
+        inferred_rows = len(data)
+        inferred_cols = max((len(row) for row in data), default=0)
+        rows = inferred_rows if rows is None else rows
+        cols = inferred_cols if cols is None else cols
+    if rows is None or cols is None:
+        raise ValueError("rows and cols are required when data is not provided")
+    if rows < 1 or cols < 1:
+        raise ValueError("rows and cols must be positive")
+    table = Table.create(rows, cols, data=data, cells=cells, style=style)
+    table.alignment = alignment
+    table.borders = borders
+    _attach_table_document(table, document)
+    return table
+
+
+def _attach_table_document(table: Table, document: Any | None) -> None:
+    table.document = document
+    seen: set[int] = set()
+    for row in table.rows:
+        for cell in row.cells:
+            identity = id(cell)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            cell.document = document
+            for block in cell.blocks:
+                _attach_block_document(block, document)
+    for cell in table.cells:
+        identity = id(cell)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        cell.document = document
+        for block in cell.blocks:
+            _attach_block_document(block, document)
+
+
+def _attach_block_document(block: Any, document: Any | None) -> None:
+    if isinstance(block, Paragraph):
+        block.document = document
+        for index, inline in enumerate(block.inlines):
+            if isinstance(inline, Run):
+                inline.paragraph = block
+            elif isinstance(inline, _PendingPicture) and document is not None:
+                block.inlines[index] = document.create_picture(
+                    inline.source,
+                    width=inline.width,
+                    height=inline.height,
+                    alt_text=inline.alt_text,
+                )
+    elif isinstance(block, Table):
+        _attach_table_document(block, document)
+
+
 @dataclass
 class SectionMargins:
     top: Length | int | float = field(default_factory=lambda: inch(1))
@@ -415,9 +590,16 @@ class HeaderFooter:
         alignment: Alignment | None = None,
         borders: bool = True,
     ) -> Table:
-        table = Table.create(rows, cols, data=data, cells=cells, style=style)
-        table.alignment = alignment
-        table.borders = borders
+        table = _create_table(
+            rows=rows,
+            cols=cols,
+            data=data,
+            cells=cells,
+            style=style,
+            alignment=alignment,
+            borders=borders,
+            document=self.document,
+        )
         self.blocks.append(table)
         return table
 
@@ -474,9 +656,16 @@ class Footnote:
         alignment: Alignment | None = None,
         borders: bool = True,
     ) -> Table:
-        table = Table.create(rows, cols, data=data, cells=cells, style=style)
-        table.alignment = alignment
-        table.borders = borders
+        table = _create_table(
+            rows=rows,
+            cols=cols,
+            data=data,
+            cells=cells,
+            style=style,
+            alignment=alignment,
+            borders=borders,
+            document=self.document,
+        )
         self.blocks.append(table)
         return table
 
@@ -485,6 +674,38 @@ class Footnote:
 class PageNumbering:
     start: int | None = None
     format: PageNumberFormat | None = None
+
+
+@dataclass
+class TableOfContents:
+    title: str | None = "Contents"
+    levels: tuple[int, int] = (1, 3)
+    hyperlink: bool = True
+    use_outline_levels: bool = True
+    hide_page_numbers_in_web: bool = True
+    dirty: bool = True
+    title_style: str | None = "TOCHeading"
+
+
+@dataclass
+class Caption:
+    text: str
+    label: str = "Figure"
+    sequence: str = "Figure"
+    separator: str = " "
+    style: str | None = "Caption"
+    numbering_format: str = "ARABIC"
+    dirty: bool = True
+
+
+@dataclass
+class TableOfFigures:
+    title: str | None = "Table of Figures"
+    sequence: str = "Figure"
+    hyperlink: bool = True
+    hide_page_numbers_in_web: bool = True
+    dirty: bool = True
+    title_style: str | None = "TOCHeading"
 
 
 @dataclass
@@ -573,6 +794,81 @@ class Section:
         paragraph.list_level = level
         return paragraph
 
+    def add_toc(
+        self,
+        *,
+        title: str | None = "Contents",
+        levels: tuple[int, int] = (1, 3),
+        hyperlink: bool = True,
+        use_outline_levels: bool = True,
+        hide_page_numbers_in_web: bool = True,
+        dirty: bool = True,
+        title_style: str | None = "TOCHeading",
+    ) -> TableOfContents:
+        if len(levels) != 2:
+            raise ValueError("toc levels must contain exactly two values")
+        start_level, end_level = levels
+        if start_level < 1 or end_level < 1 or start_level > 9 or end_level > 9:
+            raise ValueError("toc levels must be between 1 and 9")
+        if start_level > end_level:
+            raise ValueError("toc start level cannot be greater than end level")
+        toc = TableOfContents(
+            title=title,
+            levels=(start_level, end_level),
+            hyperlink=hyperlink,
+            use_outline_levels=use_outline_levels,
+            hide_page_numbers_in_web=hide_page_numbers_in_web,
+            dirty=dirty,
+            title_style=title_style,
+        )
+        self.blocks.append(toc)
+        return toc
+
+    def add_caption(
+        self,
+        text: str,
+        *,
+        label: str = "Figure",
+        sequence: str = "Figure",
+        separator: str = " ",
+        style: str | None = "Caption",
+        numbering_format: str = "ARABIC",
+        dirty: bool = True,
+    ) -> Caption:
+        caption = _create_caption(
+            text=text,
+            label=label,
+            sequence=sequence,
+            separator=separator,
+            style=style,
+            numbering_format=numbering_format,
+            dirty=dirty,
+        )
+        self.blocks.append(caption)
+        return caption
+
+    def add_table_of_figures(
+        self,
+        *,
+        title: str | None = "Table of Figures",
+        sequence: str = "Figure",
+        hyperlink: bool = True,
+        hide_page_numbers_in_web: bool = True,
+        dirty: bool = True,
+        title_style: str | None = "TOCHeading",
+    ) -> TableOfFigures:
+        sequence = _validate_field_identifier(sequence, name="table of figures sequence")
+        table = TableOfFigures(
+            title=title,
+            sequence=sequence,
+            hyperlink=hyperlink,
+            hide_page_numbers_in_web=hide_page_numbers_in_web,
+            dirty=dirty,
+            title_style=title_style,
+        )
+        self.blocks.append(table)
+        return table
+
     def add_table(
         self,
         rows: int | None = None,
@@ -593,13 +889,16 @@ class Section:
             inferred_cols = max((len(row) for row in data), default=0)
             rows = inferred_rows if rows is None else rows
             cols = inferred_cols if cols is None else cols
-        if rows is None or cols is None:
-            raise ValueError("rows and cols are required when data is not provided")
-        if rows < 1 or cols < 1:
-            raise ValueError("rows and cols must be positive")
-        table = Table.create(rows, cols, data=data, cells=cells, style=style)
-        table.alignment = alignment
-        table.borders = borders
+        table = _create_table(
+            rows=rows,
+            cols=cols,
+            data=data,
+            cells=cells,
+            style=style,
+            alignment=alignment,
+            borders=borders,
+            document=self.document,
+        )
         self.blocks.append(table)
         return table
 
@@ -737,6 +1036,38 @@ class Section:
         raise ValueError("variant must be 'default', 'first', or 'even'")
 
 
+def _validate_field_identifier(value: str, *, name: str) -> str:
+    identifier = str(value).strip()
+    if not identifier:
+        raise ValueError(f"{name} cannot be empty")
+    if any(char.isspace() or char in {'"', "\\"} for char in identifier):
+        raise ValueError(f"{name} cannot contain spaces, quotes, or backslashes")
+    return identifier
+
+
+def _create_caption(
+    *,
+    text: str,
+    label: str,
+    sequence: str,
+    separator: str,
+    style: str | None,
+    numbering_format: str,
+    dirty: bool,
+) -> Caption:
+    sequence = _validate_field_identifier(sequence, name="caption sequence")
+    numbering_format = _validate_field_identifier(numbering_format, name="caption numbering format")
+    return Caption(
+        text=str(text),
+        label=str(label),
+        sequence=sequence,
+        separator=str(separator),
+        style=style,
+        numbering_format=numbering_format,
+        dirty=dirty,
+    )
+
+
 def _validate_section_columns(
     *,
     columns: int,
@@ -778,6 +1109,7 @@ class ParagraphStyle:
     alignment: Alignment | None = None
     space_before: Length | int | float | None = None
     space_after: Length | int | float | None = None
+    outline_level: int | None = None
 
 
 @dataclass

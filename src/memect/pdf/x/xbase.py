@@ -7,6 +7,7 @@ from typing import Any, Final, Self, Sequence, TextIO, cast, override
 
 from memect.base import strs
 from memect.base.bbox import BBox, Point
+from memect.base.matrix import Matrix
 from memect.base.pattern import XPattern
 from memect.pdf.base import (
     KBlock,
@@ -291,7 +292,7 @@ class XTree:
                 self.xobjects.append(XObject.from_object(obj))
     
 
-    def get_sections(self)->list[Any]:
+    def get_sections(self)->list['XSection']:
         """获得对应docx的节（分栏）"""
         #[c1|c2]=>双栏的，可以左右对齐，或者偏左，偏右
         #[--c3--]=>单栏的
@@ -302,15 +303,51 @@ class XTree:
         nodes = self.root.flat()
         #TODO 去掉逻辑标题
         #TODO 还需要根据书写顺序排序（虽然99.99%情况下不需要了）
-        objects = [node.object for node in nodes if node.object.objects]
+        #TODO 如果首页没有页眉页脚，也独立为一个Section
+        xobjects = [node.object for node in nodes if node.object.objects]
         sections:list[XSection]=[]
-        i=0
-        while i<len(objects):
-            obj = objects[i]
+        for xobj in xobjects:
+            if isinstance(xobj,XText) and len(xobj.objects)==0:
+                #表示为逻辑上的，没有具体的对象，跳过
+                continue
             #获得对象是单栏/双栏/三栏布局的
-            if not sections or not sections[-1].join(obj):
-                section=XSection.from_object(obj)
+            if not sections or not sections[-1].join(xobj):
+                section=XSection.from_object(xobj)
                 sections.append(section)
+        
+        #最后判断节和节之间是否需要分页，如果间距过大，或者为某些开始？
+        i=1
+        for i in range(1,len(sections)):
+            s1=sections[i-1]
+            s2=sections[i]
+            #准确的为y0最小的
+            xobj1=s1.xobjects[-1]
+            xobj2=s2.xobjects[0]
+            obj1=xobj1.objects[-1]
+            obj2=xobj2.objects[0]
+            if obj1.page.number==obj2.page.number:
+                #在同一页肯定为continuous
+                s2.start='continuous'
+            elif obj1.page.number+1==obj2.page.number:
+                #判断是否需要分页，如果
+                if obj1.bbox.y0-obj1.page.bbox.y0>=200:
+                    #如果上一节距离页脚有很大的空间，就表示需要分页
+                    s2.start='nextPage'
+                else:
+                    #如果为章节的标题，可能分页更好？
+                    #而且为每一页的第一个对象？
+                    #有些文档也是使用“第一章xxx”，“第二章xxx”，也没有分页
+                    if isinstance(xobj2,XText) and xobj2.is_title():
+                        k=obj2.page.objects.index(obj2)
+                        if k==0:
+                            pass
+                        pass
+                    s2.start='nextPage'
+            else:
+                #跳了几页肯定为分页
+                s2.start='nextPage'
+                 
+
         return sections
     
 
@@ -354,16 +391,56 @@ class XSection:
         self.col_num:int=1
         self.space:int=0
         self.columns:list[XColumn]=[]
+        self.start:str='nextPage'
     
-    def join(self,obj:'XObject')->bool:
+    def join(self,xobj:'XObject')->bool:
         """判断obj是否属于该节，如果属于，添加到该节且返回True"""
-        self.xobjects.append(obj)
+        #页眉页脚相同
+        #分栏相同
+        #没有分页
+
+        #前面几页没有页眉页脚的作为一栏
+        #为了简化，页眉不同也不分节，使用同一个页眉页脚
+        obj = xobj.objects[0]
+        s1=obj.page.get_section(obj)
+        if s1.col_num==self.col_num:
+            #TODO 现在简单的判断栏数即可，后续还需要判断栏宽
+            self.xobjects.append(xobj)
+            return True
+        else:
+            return False
     
 
+    def is_page_break(self,xobj:'XObject')->bool:
+        """判断index对应的对象前面，是否需要插入一个分页符"""
+        index = self.xobjects.index(xobj)
+        #使用阅读顺序第一个？还是使用y1最高的（双栏布局可能就不正确）
+        obj = xobj.objects[0]
+        k = obj.page.objects.index(obj)
+        if k==0:
+            #表示为当前页面的第一个对象，获得上一页的最后一个对象，判断和页面底部的距离
+            #如果距离页面底部很大，就分页
+            #或者当前对象为章节标题等，也需要分页
+            if isinstance(xobj,XText) and xobj.node.level==1:
+                return True
+            if index-1>=0:
+                prev_xobj = self.xobjects[index-1]
+                if prev_xobj.objects[-1].bbox.y0>=200:
+                    #严格的说是和页眉比较，但是这里直接和页面底部比较即可？
+                    pass
+        return False
 
     @classmethod
-    def from_object(cls,obj:'XObject')->Self:
-        return cls()
+    def from_object(cls,xobj:'XObject')->Self:
+        assert len(xobj.objects)>0
+        obj = xobj.objects[0]
+        s1=obj.page.get_section(obj)
+        sec = cls()
+        sec.col_num = s1.col_num
+        sec.xobjects.append(xobj)
+        #设置列的宽度，目前为相等的
+        #sec.columns = []
+        return sec
 
 
 class XObject:
@@ -376,6 +453,8 @@ class XObject:
         self.node = XNode(self)
         self._objects: Final[list[KObject]] = []
         self.subtype:str|None=None
+        self.bbox:BBox|None=None
+        """逻辑的bbox，如：跨页/跨栏合并后获得一个，width/height是正确的,x0,y0,x1,y1等可以为相对"""
 
     @property
     def pages(self) -> Sequence[KPage]:
@@ -489,6 +568,11 @@ class XObject:
         if isinstance(obj,KTable):
             xobj = XTable(doc,[XCell.from_cell(c) for c in obj.cells],tables=[obj])
             xobj.subtype=obj.subtype
+            m=Matrix().translate(-obj.bbox.x0,-obj.bbox.y0)
+            for c1,c2 in zip(xobj.cells,obj.cells):
+                c1.bbox = c2.bbox.transform(m)
+
+            xobj.bbox = obj.bbox.transform(m)
         else:
             if isinstance(obj,KText):
                 xobj = XText(doc)
@@ -516,6 +600,9 @@ class XCell:
         self.col_span = col_span
         self.cells: Sequence[KCell] = tuple(cells or []) 
         """表示组成这个单元格的原文的cell，注意：这些cell可能来自body table，如果表头重复的"""
+
+        self.bbox:BBox|None=None
+        """可以设置逻辑位置，相对表格左下角"""
         # TODO 严格的说，单元格内包含的也是xobjects
         # 如：2个单元格合并，t1+t2，那么，也需要合并为一个xtextbox才更加合理
         # 这样才能够在生成docx更加准确
@@ -922,11 +1009,17 @@ class XTable(XObject):
     def from_grid(cls,doc:KDocument,grid:Grid,items:Sequence[XItem[KCell]],*,tables:Sequence[KTable])->Self:
         xcells:list[XCell]=[]
         items = list(items)
+        m = Matrix().translate(-grid.bbox.x0,-grid.bbox.y0)
         for cell in grid.cells:
             include_cells = [item.object for item in cell.bbox.get(items,ratio=0.8,remove=True)]
             xcell = XCell(row_index=cell.row_index,col_index=cell.col_index,row_span=cell.row_span,col_span=cell.col_span,cells=include_cells)
+            #相对表格左下角
+            xcell.bbox=cell.bbox.transform(m)
             xcells.append(xcell)
-        return cls(doc,xcells,tables=tables)
+        xtable = cls(doc,xcells,tables=tables)
+        #(0,0,width,height)
+        xtable.bbox = grid.bbox.transform(m)
+        return xtable
 
 class XText(XObject):
     """文本内容"""
@@ -959,10 +1052,8 @@ class XText(XObject):
     def text(self)->str:
         if self._text is not None:
             return self._text
-        
         if self._raw_text is None:
-            #XText or XTextbox
-            self._raw_text=''.join(getattr(obj,'text') for obj in self.objects)
+            self._raw_text=''.join(obj.text for obj in self.objects if isinstance(obj,KText))
         return self._raw_text
     
     
@@ -1001,19 +1092,30 @@ class XFigure(XObject):
     type='xfigure'
     def __init__(self,doc:KDocument):
         super().__init__(doc)
-        self.filename: str = ""
+        self._filename: str = ""
         """表示新的图片文件名，如：几个图片合并后的截图，如果为空，表示没有合并，也就是只有一个图片"""
+
     
 
     def invalidate(self):
         super().invalidate()
         if len(self.objects)>1:
             #需要重新生成图片？
+            #self.filename=''
+            #self.bbox=BBox(0,0,w,h)
             pass
 
-    @cached_property
+
+    @property
+    def filename(self)->str:
+        return self._filename or self.figures[0].filename
+        
+    @filename.setter
+    def filename(self,filename:str):
+        self._filename = filename
+    
+    @property
     def fullpath(self) -> Path:
-        assert len(self.filename)>0
         return self.doc.out_dir / self.filename
 
     @override
@@ -1028,9 +1130,10 @@ class XFigure(XObject):
     def jsonify(self)->Any:
         data:dict[str,Any] = {
         }
-        data['objects']=self._jsonify_objects(self._objects)
-        if len(self._objects)>1:
+        data['objects']=self._jsonify_objects(self.objects)
+        if len(self.objects)>1:
             data['filename']=self.filename
+            #data['bbox']
 
         return data
 
@@ -1073,7 +1176,7 @@ class XFormula(XObject):
         else:
             return self.formulas[0].inline
 
-    @cached_property
+    @property
     def fullpath(self) -> Path:
         return self.doc.out_dir / self.filename
     

@@ -7,6 +7,8 @@ The implementation writes WordprocessingML directly and only depends on
 from .document import Document
 from .errors import DocxError, UnsupportedImageError, ValidationError
 from .model import (
+    Caption,
+    DocumentDefaults,
     HeaderFooter,
     Paragraph,
     ParagraphFormat,
@@ -22,6 +24,8 @@ from .model import (
     Table,
     TableCell,
     TableRow,
+    TableOfContents,
+    TableOfFigures,
 )
 from .units import Length, cm, emu, inch, mm, pt, px, twip
 
@@ -31,6 +35,8 @@ __all__ = [
     "Document",
     "Docx",
     "DocxError",
+    "Caption",
+    "DocumentDefaults",
     "HeaderFooter",
     "Length",
     "Paragraph",
@@ -38,7 +44,6 @@ __all__ = [
     "ParagraphStyle",
     "PageField",
     "PageNumbering",
-    "Cell",
     "Footnote",
     "FootnoteReference",
     "Run",
@@ -48,6 +53,8 @@ __all__ = [
     "Table",
     "TableCell",
     "TableRow",
+    "TableOfContents",
+    "TableOfFigures",
     "UnsupportedImageError",
     "ValidationError",
     "cm",

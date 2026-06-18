@@ -7,6 +7,7 @@ from pathlib import Path
 from .media import load_picture
 from .model import (
     Alignment,
+    DocumentDefaults,
     DocumentProperties,
     Footnote,
     ParagraphStyle,
@@ -25,6 +26,7 @@ class Document:
         self.sections: list[Section] = [Section(start="nextPage")]
         self.section = self.sections[0]
         self._attach_document_refs(self.section)
+        self.defaults = DocumentDefaults()
         self.properties = DocumentProperties(title=title, creator=creator)
         self.styles: dict[str, ParagraphStyle] = {}
         self._next_image_id = 1
@@ -105,6 +107,24 @@ class Document:
         self._next_image_id += 1
         return picture
 
+    def set_default_font(
+        self,
+        *,
+        font: str | None = None,
+        east_asia_font: str | None = None,
+        size: Length | int | float | None = None,
+        color: str | None = None,
+    ) -> Document:
+        if font is not None:
+            self.defaults.font = font
+        if east_asia_font is not None:
+            self.defaults.east_asia_font = east_asia_font
+        if size is not None:
+            self.defaults.size = size
+        if color is not None:
+            self.defaults.color = color
+        return self
+
     def add_paragraph_style(
         self,
         style_id: str,
@@ -121,7 +141,10 @@ class Document:
         alignment: Alignment | None = None,
         space_before: Length | int | float | None = None,
         space_after: Length | int | float | None = None,
+        outline_level: int | None = None,
     ) -> ParagraphStyle:
+        if outline_level is not None and (outline_level < 0 or outline_level > 8):
+            raise ValueError("outline_level must be between 0 and 8")
         style = ParagraphStyle(
             style_id=style_id,
             name=name,
@@ -136,6 +159,7 @@ class Document:
             alignment=alignment,
             space_before=space_before,
             space_after=space_after,
+            outline_level=outline_level,
         )
         self.styles[style_id] = style
         return style

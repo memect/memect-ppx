@@ -127,8 +127,7 @@ class Parser:
                 doc.write("doc.pptx", data)
 
             if doc.params.docx:
-                from .docx import DocxBuilder
-
+                from memect.docx.builder import DocxBuilder
                 data = DocxBuilder().build(doc)
                 doc.write("doc.docx", data)
 
