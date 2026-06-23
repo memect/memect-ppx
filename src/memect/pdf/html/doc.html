@@ -221,6 +221,16 @@
             }
         }
 
+        .page[data-type="image"]{
+            outline-color: #81d784;
+        }
+        .page[data-type="pdf"]{
+
+        }
+        .page[data-type="hybrid"]{
+            outline-color: #8e78e0;
+        }
+
         .page-number {
             display: none;
             position: absolute;
@@ -556,7 +566,10 @@
                 <label><input type="checkbox" id="show-page-section-input">分栏</label>
             </div>
             <div class="toolbar-show-page-number">
-                <label><input type="checkbox" id="show-page-number-input"> 页码</label>
+                <label><input type="checkbox" id="show-page-number-input">页码</label>
+            </div>
+            <div class="toolbar-show-table-color">
+                <label><input type="checkbox" id="show-table-color-input">表格颜色</label>
             </div>
         </div>
         <div class="workspace">

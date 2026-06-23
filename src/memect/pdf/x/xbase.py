@@ -13,6 +13,7 @@ from memect.pdf.base import (
     KBlock,
     KCell,
     KChar,
+    KColor,
     KDocument,
     KFigure,
     KFormula,
@@ -20,6 +21,7 @@ from memect.pdf.base import (
     KPage,
     KTable,
     KText,
+    TableIntent,
 )
 from memect.pdf.grid import Grid
 
@@ -607,6 +609,27 @@ class XCell:
         # 如：2个单元格合并，t1+t2，那么，也需要合并为一个xtextbox才更加合理
         # 这样才能够在生成docx更加准确
         #self.xobjects:list[XObject]=[]
+    
+
+    @property
+    def color(self)->KColor|None:
+        """获得单元格的背景颜色"""
+        for cell in self.cells:
+            #可能来自body cell，在cell.copy()的时候，已经同步了color/font_color
+            color=cell.color or KColor.WHITE
+            if not color.is_white():
+                #使用第一个的颜色，正常应该都是相同的颜色
+                return color
+        return None
+    
+    @property
+    def font_color(self)->KColor|None:
+        """如果是来自图片的表格，字体颜色需要通过ocr的方式获得"""
+        for cell in self.cells:
+            color = cell.font_color
+            if color is not None:
+                return color
+        return None
 
     @property
     def merged(self)->bool|None:
@@ -795,6 +818,10 @@ class XTable(XObject):
         # 实际上并不需要排序
         column.sort(key=lambda cell: cell.row_index)
         return column
+    
+    def is_layout(self)->bool:
+        """表示表格的意图为布局"""
+        return self.tables[0].intent==TableIntent.LAYOUT
     
     @override
     def jsonify(self)->Any:

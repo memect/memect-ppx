@@ -28,6 +28,7 @@ from .model import (
     TableCell,
     TableOfContents,
     TableOfFigures,
+    TableStyle,
 )
 from .opc import Package
 from .errors import ValidationError
@@ -625,6 +626,7 @@ class _Serializer:
             _sub(tbl_pr, "jc", {"w:val": value})
         if table.borders:
             tbl_pr.append(_borders_xml())
+        tbl_pr.append(_table_look_xml(table))
 
         layout = _resolve_table_layout(table)
         grid = _sub(tbl, "tblGrid")
@@ -633,17 +635,24 @@ class _Serializer:
 
         for row_index, layout_row in enumerate(layout.rows):
             tr = _sub(tbl, "tr")
-            if layout_row.height is not None or row_index < table.repeat_header_rows:
+            allow_row_break = (
+                layout_row.allow_break_across_pages
+                if layout_row.allow_break_across_pages is not None
+                else table.allow_row_break_across_pages
+            )
+            if layout_row.height is not None or row_index < table.repeat_header_rows or allow_row_break is False:
                 tr_pr = _sub(tr, "trPr")
                 if row_index < table.repeat_header_rows:
                     _sub(tr_pr, "tblHeader")
+                if allow_row_break is False:
+                    _sub(tr_pr, "cantSplit")
             if layout_row.height is not None:
                 _sub(tr_pr, "trHeight", {"w:val": to_twips(layout_row.height, default_unit="pt")})
             for entry in layout_row.entries:
-                tr.append(self._cell_xml(entry, source_part))
+                tr.append(self._cell_xml(entry, source_part, table=table))
         return tbl
 
-    def _cell_xml(self, cell: _LayoutCell, source_part: str) -> etree._Element:
+    def _cell_xml(self, cell: _LayoutCell, source_part: str, *, table: Table) -> etree._Element:
         tc = _w("tc")
         tc_pr = _sub(tc, "tcPr")
         width = to_twips(cell.source.width, default_unit="in")
@@ -654,8 +663,9 @@ class _Serializer:
         if cell.v_merge is not None:
             attrs = None if cell.v_merge == "continue" else {"w:val": "restart"}
             _sub(tc_pr, "vMerge", attrs)
-        if cell.source.shading:
-            _sub(tc_pr, "shd", {"w:fill": _color(cell.source.shading)})
+        shading = _effective_cell_shading(table, cell)
+        if shading:
+            _sub(tc_pr, "shd", {"w:fill": _color(shading)})
         if cell.source.vertical_align:
             _sub(tc_pr, "vAlign", {"w:val": cell.source.vertical_align})
 
@@ -722,8 +732,10 @@ class _Serializer:
             root.append(self._style_xml(style))
         root.append(_table_normal_style_xml())
         root.append(_table_grid_style_xml())
-        for style_id in sorted(self.document.styles):
-            root.append(self._style_xml(self.document.styles[style_id]))
+        for style_id in sorted(self.document.paragraph_styles):
+            root.append(self._style_xml(self.document.paragraph_styles[style_id]))
+        for style_id in sorted(self.document.table_styles):
+            root.append(_custom_table_style_xml(self.document.table_styles[style_id]))
         return _xml(root)
 
     def _style_xml(self, style: ParagraphStyle) -> etree._Element:
@@ -963,6 +975,81 @@ def _table_grid_style_xml() -> etree._Element:
     return style
 
 
+def _custom_table_style_xml(style: TableStyle) -> etree._Element:
+    node = _w("style", {"w:type": "table", "w:styleId": style.style_id})
+    _sub(node, "name", {"w:val": style.name or style.style_id})
+    if style.based_on:
+        _sub(node, "basedOn", {"w:val": style.based_on})
+    _sub(node, "qFormat")
+    tbl_pr = _sub(node, "tblPr")
+    tbl_pr.append(_borders_xml())
+
+    _append_table_style_shading(node, "firstRow", style.header_shading)
+    if style.banded_row_shading is not None:
+        first, second = style.banded_row_shading
+        _append_table_style_shading(node, "band1Horz", first)
+        _append_table_style_shading(node, "band2Horz", second)
+    if style.banded_column_shading is not None:
+        first, second = style.banded_column_shading
+        _append_table_style_shading(node, "band1Vert", first)
+        _append_table_style_shading(node, "band2Vert", second)
+    _append_table_style_shading(node, "firstCol", style.first_column_shading)
+    _append_table_style_shading(node, "lastCol", style.last_column_shading)
+    return node
+
+
+def _append_table_style_shading(parent: etree._Element, condition: str, shading: str | None) -> None:
+    if shading is None:
+        return
+    style_pr = _sub(parent, "tblStylePr", {"w:type": condition})
+    tc_pr = _sub(style_pr, "tcPr")
+    _sub(tc_pr, "shd", {"w:fill": _color(shading)})
+
+
+def _table_look_xml(table: Table) -> etree._Element:
+    style = _table_style_for_table(table)
+    first_row = table.look.first_row or (style is not None and style.header_shading is not None)
+    last_row = table.look.last_row
+    first_column = table.look.first_column or (style is not None and style.first_column_shading is not None)
+    last_column = table.look.last_column or (style is not None and style.last_column_shading is not None)
+    banded_rows = table.look.banded_rows or (style is not None and style.banded_row_shading is not None)
+    banded_columns = table.look.banded_columns or (style is not None and style.banded_column_shading is not None)
+    return _w(
+        "tblLook",
+        {
+            "w:firstRow": "1" if first_row else "0",
+            "w:lastRow": "1" if last_row else "0",
+            "w:firstColumn": "1" if first_column else "0",
+            "w:lastColumn": "1" if last_column else "0",
+            "w:noHBand": "0" if banded_rows else "1",
+            "w:noVBand": "0" if banded_columns else "1",
+        },
+    )
+
+
+def _table_style_for_table(table: Table) -> TableStyle | None:
+    if table.style is None or table.document is None:
+        return None
+    table_styles = getattr(table.document, "table_styles", {})
+    return table_styles.get(table.style)
+
+
+def _effective_cell_shading(table: Table, cell: _LayoutCell) -> str | None:
+    if cell.source.shading:
+        return cell.source.shading
+    if table.header_shading and cell.row_index < table.repeat_header_rows:
+        return table.header_shading
+    if table.banded_row_shading is not None:
+        shading = table.banded_row_shading[cell.row_index % 2]
+        if shading:
+            return shading
+    if table.banded_column_shading is not None:
+        shading = table.banded_column_shading[cell.col_index % 2]
+        if shading:
+            return shading
+    return None
+
+
 def _borders_xml() -> etree._Element:
     borders = _w("tblBorders")
     for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
@@ -1029,6 +1116,8 @@ def _columns_xml(section: Section) -> etree._Element:
 @dataclass
 class _LayoutCell:
     source: TableCell
+    row_index: int = 0
+    col_index: int = 0
     col_span: int = 1
     v_merge: str | None = None
     blocks: list[Any] = field(default_factory=list)
@@ -1038,6 +1127,7 @@ class _LayoutCell:
 class _LayoutRow:
     entries: list[_LayoutCell]
     height: Length | int | float | None = None
+    allow_break_across_pages: bool | None = None
 
 
 @dataclass
@@ -1148,6 +1238,8 @@ def _resolve_matrix_layout(table: Table) -> _TableLayout:
                 entries.append(
                     _LayoutCell(
                         source=TableCell(),
+                        row_index=row_index,
+                        col_index=col_index,
                         v_merge="continue",
                         blocks=[Paragraph()],
                     )
@@ -1156,6 +1248,8 @@ def _resolve_matrix_layout(table: Table) -> _TableLayout:
             entries.append(
                 _LayoutCell(
                     source=cell,
+                    row_index=row_index,
+                    col_index=col_index,
                     col_span=cell.col_span,
                     v_merge="restart" if cell.row_span > 1 else None,
                     blocks=cell.blocks,
@@ -1169,13 +1263,21 @@ def _resolve_matrix_layout(table: Table) -> _TableLayout:
             entries.append(
                 _LayoutCell(
                     source=TableCell(),
+                    row_index=row_index,
+                    col_index=col_index,
                     v_merge="continue",
                     blocks=[Paragraph()],
                 )
             )
             col_index += 1
         col_count = max(col_count, col_index)
-        rows.append(_LayoutRow(entries, height=row.height))
+        rows.append(
+            _LayoutRow(
+                entries,
+                height=row.height,
+                allow_break_across_pages=row.allow_break_across_pages,
+            )
+        )
     return _TableLayout(rows, col_count)
 
 
@@ -1221,6 +1323,8 @@ def _resolve_explicit_cells_layout(table: Table) -> _TableLayout:
                 entries.append(
                     _LayoutCell(
                         source=anchor,
+                        row_index=row_index,
+                        col_index=col_index,
                         col_span=anchor.col_span,
                         v_merge="restart" if anchor.row_span > 1 else None,
                         blocks=anchor.blocks,
@@ -1234,6 +1338,8 @@ def _resolve_explicit_cells_layout(table: Table) -> _TableLayout:
                 entries.append(
                     _LayoutCell(
                         source=owner,
+                        row_index=row_index,
+                        col_index=col_index,
                         col_span=owner.col_span,
                         v_merge="continue",
                         blocks=[Paragraph()],
@@ -1243,7 +1349,20 @@ def _resolve_explicit_cells_layout(table: Table) -> _TableLayout:
                 continue
 
             matrix_cell = row.cells[col_index] if col_index < len(row.cells) else TableCell()
-            entries.append(_LayoutCell(source=matrix_cell, blocks=matrix_cell.blocks))
+            entries.append(
+                _LayoutCell(
+                    source=matrix_cell,
+                    row_index=row_index,
+                    col_index=col_index,
+                    blocks=matrix_cell.blocks,
+                )
+            )
             col_index += 1
-        rows.append(_LayoutRow(entries, height=row.height))
+        rows.append(
+            _LayoutRow(
+                entries,
+                height=row.height,
+                allow_break_across_pages=row.allow_break_across_pages,
+            )
+        )
     return _TableLayout(rows, col_count)

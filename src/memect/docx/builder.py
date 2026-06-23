@@ -1,6 +1,7 @@
 from typing import Any, Final, Sequence
 
-from memect.pdf.base import KChar, KDocument, KFigure, KFormula, KObject, KSpan, KTable, KText, KTextline
+from memect.base.bbox import BBox
+from memect.pdf.base import KChar, KColor, KDocument, KFigure, KFormula, KObject, KPage, KRect, KSpan, KTable, KText, KTextline, TableIntent
 from memect.pdf.x.xbase import XBlock, XFigure, XFormula, XSection, XTable, XText
 from .document import Document
 from .model import Paragraph, Section, SectionMargins, TableCell
@@ -62,7 +63,118 @@ class _XRun:
     def color(self)->str:
         pass
 
+class _Styles:
+    def __init__(self):
+        super().__init__()
+        self._table_styles:dict[str,Any]={}
+    
+    def parse(self,doc:KDocument):
+        xtree = doc.tree
+        assert xtree is not None
 
+        #使用style，便于文档二次编辑
+        #每个表格设置自己的style，便于实现，二次编辑不方便
+        #表格的style千变万化，典型的有这几种
+        #1.
+        #表头使用指定的颜色（可以没有表头）
+        #其他行使用交替颜色
+        #2.
+        #看似为交替，但是又不全是，如：
+        #---red---
+        #---blue--
+        #---red---
+        #---red---  
+        #---blue
+        #---red--
+
+        #现在如下：
+        #前面几行颜色相同，理解为表头
+        #后面的严格交替，可以作为一个style
+        
+        for node in xtree.root.flat():
+            if node.is_table() and not node.table.is_layout():
+                #如果是用来布局的，忽略
+                xtable = node.table
+                
+                for ktable in xtable.tables:
+                    cells = ktable.get_row(0)
+                    #如果这一行的颜色都是相同的，如果是来自ocr，相近就可以？
+                    for cell in cells:
+                        color = cell.color or KColor.WHITE
+                    pass
+                pass
+
+        for page in doc.working_pages:
+            for table in page.objects:
+                if isinstance(table,KTable):
+                    pass
+    
+    def _parse_table(self,table:KTable):
+        #获得表头的颜色
+        #是否行交替
+        #是否列交替
+        #其他复杂的就不考虑了，如：每一行使用不同的颜色，或者某个单元格使用某些颜色
+        #如果是来自pdf的，可以根据fill rect来获得？
+        #如果是来自图片的，从视觉上获得颜色？
+        
+        header_style={
+            'background':'#ffffff'
+        }
+
+        row_style={
+
+        }
+
+        col_style={}
+
+        if table.header is not None:
+            #表示为跨页表格的表头
+            #1.没有使用颜色
+            #2.使用特定的颜色
+            #3.使用交替的颜色
+            pass
+        else:
+            #
+            pass
+        pass
+
+    def _get_table_colors(self,table:KTable):
+        for i in range(table.row_num):
+            #可能存在跨行的，都仅仅取第一行
+            row = table.get_row(i)
+            #严格的，应该是获得一个复杂的区域，因为存在跨行
+            #使用shapely等来计算这个区域的面积
+            pass
+    def _get_area_color_by_pdf(self,page:KPage,bbox:BBox):
+        if not page.pdf_rects:
+            return None
+        
+        #可能为多个小矩形，使用简单的算法，就是颜色相同的矩形的面积相加，取最大面积
+        rects = bbox.get(page.pdf_rects,ratio=0.5)
+        if not rects:
+            return None
+        
+        colors:dict[KColor,list[KRect]]={}
+        for rect in rects:
+            group = colors.setdefault(rect.color,[])
+            group.append(rect)
+        
+        areas:list[tuple[Any,float]]=[]
+        for rgba,group in colors.items():
+            areas.append((rgba,sum(r.bbox.area for r in group)))
+        #排序
+        areas.sort(key=lambda item:item[1],reverse=True)
+        color,area = areas[0]
+        if area/bbox.area>=0.5:
+            pass
+        
+        return None
+
+    def _get_area_color_by_image(self,page:KPage,bbox:BBox):
+        #从视觉上获得指定区域的颜色
+        pass
+
+    
 class DocxBuilder:
     def __init__(self):
         super().__init__()
@@ -82,6 +194,15 @@ class DocxBuilder:
         doc.add_paragraph_style('Footer',name='页脚')
         doc.add_paragraph_style('Footnote',name='脚注')
 
+        #全局计算表格的style，有多少个表格的style是一样的
+        #表格的style
+        #表头固定颜色，行交替
+        if False:
+            doc.add_table_style('',name='',header_shading='',banded_rows=('',''))
+            #表头固定颜色，列交替
+            doc.add_table_style('',name='',header_shading='',banded_columns=('',''))
+
+        
         
         
         if kdoc.tree is not None:
@@ -313,6 +434,11 @@ class DocxBuilder:
             parent.add_table(rows=ktable.row_num,cols=ktable.col_num,cells=cells,alignment='center')
         
 
+        #获得表格的style
+        #独立：表示每个单元格自己设置自己的
+        #表头+交替颜色
+        #交替颜色：
+        
         cells: list[TableCell] = []
         for cell in xtable.cells:
             # 这个为逻辑上的bbox
@@ -323,7 +449,7 @@ class DocxBuilder:
             else:
                 width=pt(50*cell.col_span)
                 height=None
-
+            
             tc = TableCell(
                 row_index=cell.row_index,
                 col_index=cell.col_index,
@@ -331,6 +457,10 @@ class DocxBuilder:
                 col_span=cell.col_span,
                 width=width,
             )
+            color = cell.color
+            font_color = cell.font_color
+            if color is not None:
+                tc.set_shading(color.hex())
             cells.append(tc)
             #TODO 后续需要修改为使用xobjects，也是需要合并的，如：文本合并为一个
             for obj in cell.objects:
@@ -342,11 +472,19 @@ class DocxBuilder:
         if xtable.tables[0].header is not None:
             #表头重复
             table.set_repeat_header_rows(xtable.tables[0].header.row_num)
+            #可以设置表头的颜色
+            #table.set_header_shading()
         else:
             #不允许
             table.set_repeat_header_rows(0)
         
         #就是总是设置为跨页断行
+        table.set_allow_row_break_across_pages(True)
+
+        #设置表格列或者行使用交替颜色，为了简化或者统一修改，使用style的方式更好？
+        #table.set_banded_rows('','')
+        #table.set_banded_columns('','')
+
 
 
     def _render_xfigure(self, sec: Section, xfigure: XFigure):

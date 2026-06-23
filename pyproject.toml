@@ -50,10 +50,6 @@ dependencies = [
     #
     "types-lxml",
     "lxml",
-    #
-    #"python-docx",
-    "python-pptx",
-    "pptx-ea-font"
 ]
 
 [project.scripts]

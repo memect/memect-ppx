@@ -15,6 +15,7 @@ from typing import (
     Any,
     ClassVar,
     Final,
+    Iterator,
     Mapping,
     NotRequired,
     Self,
@@ -64,6 +65,9 @@ class PageType(StrEnum):
     IMAGE = auto()
     """表示完全作为图片解析，也就是所有字符都来自ocr"""
     UNKNOWN = auto()
+    """初始状态"""
+    HYBRID=auto()
+    """混合解析"""
 
 
 class CharSource(StrEnum):
@@ -963,6 +967,10 @@ class KPage:
     def is_unknown(self) -> bool:
         """表示未知，也就是还没有解析"""
         return self.type == PageType.UNKNOWN
+    
+    def is_hybrid(self)->bool:
+        """混合"""
+        return self.type==PageType.HYBRID
 
     def clear(self):
         """解析完毕，清除不必要的内容"""
@@ -1813,6 +1821,26 @@ class KColor:
 
     def jsonify(self) -> Any:
         return self.rgba[0:3]
+    
+    def __eq__(self,other:Any)->bool:
+        if other is self:
+            return True
+        if isinstance(other,KColor):
+            return self.rgba==other.rgba
+        else:
+            return False
+    
+    def __hash__(self)->int:
+        return hash(self.rgba)
+    
+    def hex(self)->str:
+        """返回这种格式ffaabb"""
+        r,g,b = self.rgba[0:3]
+        return f'{r:02x}{g:02x}{b:02x}'
+    
+    def hexa(self)->str:
+        r,g,b,a = self.rgba
+        return f'{r:02x}{g:02x}{b:02x}{a:02x}'
 
     @classmethod
     def from_list(
@@ -2775,6 +2803,9 @@ class KTable(KObject):
         self.intent:TableIntent = TableIntent.DATA
         """表示该表格的用途，如：layout"""
 
+        self.row_colors:list[KColor]=[]
+        self.col_colors:list[KColor]=[]
+
     def _create_grid(self):
         # TODO 如果需要快速的访问，建立一个n*m的grid
         grid: list[list[KCell]] = []
@@ -2787,6 +2818,10 @@ class KTable(KObject):
                 for j in range(cell.col_index, cell.col_index + cell.col_span):
                     grid[i][j] = cell
         return grid
+    
+    def is_layout(self)->bool:
+        """表示表格的意图是布局"""
+        return self.intent==TableIntent.LAYOUT
 
     @cached_property
     def fullpath(self) -> Path:
@@ -3582,6 +3617,11 @@ class KCell:
         self.merged:bool|None=None
         """True表示在跨页/跨栏的时候被合并"""
 
+        self.color:KColor|None=None
+        """设置或者获得单元格的背景颜色"""
+        self.font_color:KColor|None=None
+        """来自ocr的解析，可以通过这里获得字体颜色"""
+
         self.objects: Final[list[KObject]] = []
         if objects:
             self.objects.extend(objects)
@@ -3607,7 +3647,11 @@ class KCell:
             col_span = self.col_span
         if row_span is None:
             row_span = self.row_span
-        return self.__class__(self.page,self.bbox,row_index=row_index,col_index=col_index,row_span=row_span,col_span=col_span,objects=self.objects,original_cell=self)
+        cell = self.__class__(self.page,self.bbox,row_index=row_index,col_index=col_index,row_span=row_span,col_span=col_span,objects=self.objects,original_cell=self)
+        #TODO 需要复制吗？或者original_cell.color?
+        cell.color = self.color
+        cell.font_color = self.font_color
+        return cell
 
     def jsonify(self) -> Any:
         # 有些并不需要输出准确的bbox
@@ -3782,6 +3826,13 @@ class KBlock(KObject):
         )
 
 
+    def expand(self)->Iterator[KObject]:
+        """展开"""
+        for obj in self.objects:
+            if isinstance(obj,KBlock):
+                yield from obj.expand()
+            else:
+                yield obj
 class KPageHeader(KObject):
     type = "pageheader"
 

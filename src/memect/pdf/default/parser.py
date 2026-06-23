@@ -24,6 +24,7 @@ from memect.base.matrix import Matrix
 from memect.base.utils import MyBaseModel
 from memect.pdf.base import (
     CharSource,
+    KBlock,
     KChar,
     KColor,
     KDocument,
@@ -53,6 +54,7 @@ from .footnote import PageFootnoteParser
 from .header import PageHeaderParser
 from .pdf import PdfParser, PdfParserArgs
 from .table.parser import TableParser
+from .table.style import TableStyleParser
 
 
 
@@ -127,6 +129,7 @@ class DefaultParser:
         self._block_parser:Final = BlockParser()
 
         self._feature_parser:Final = FeatureParser(self._args.features)
+        self._table_style_parser:Final=TableStyleParser()
 
     def parse(self, doc: KDocument):
         timer = utils.Timer.start()
@@ -147,16 +150,21 @@ class DefaultParser:
             # 如果是按ppt，就不需要解析页面页脚等了
             self._feature_parser.parse(doc)
             self._sort_ppt(doc)
+            #如果需要生成pptx，识别表格的背景颜色
+            self._table_style_parser.parse(doc)
         else:
             # 按页解析即可
             self._other_parser.parse(doc)
             self._header_parser.parse(doc)
             self._footer_parser.parse(doc)
             self._footnote_parser.parse(doc)
-            self._block_parser.parse(doc)
             #处理features
             self._feature_parser.parse(doc)
+            #把某些对象看成一个block
+            self._block_parser.parse(doc)
             self._sort(doc)
+            #识别表格的背景颜色
+            self._table_style_parser.parse(doc)
             #TODO 再考虑跨栏/跨页的情况，对齐表格，或者把某些文本转换为表格
             #因为后续章节树分析，合并跨页表格需要
             #TODO 不管后续是否需要解析章节树，都需要做处理的
@@ -332,7 +340,8 @@ class DefaultParser:
                 objs = get_pdf_objects(page)
                 if len(objs) > 0:
                     # 至少部分文字来自ocr
-                    page.type = PageType.IMAGE
+                    #page.type = PageType.IMAGE
+                    page.type = PageType.HYBRID
                 else:
                     # 纯pdf
                     page.type = PageType.PDF

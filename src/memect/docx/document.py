@@ -14,6 +14,8 @@ from .model import (
     Picture,
     Section,
     SectionMargins,
+    ShadingPair,
+    TableStyle,
     _validate_section_columns,
 )
 from .units import Length
@@ -28,7 +30,9 @@ class Document:
         self._attach_document_refs(self.section)
         self.defaults = DocumentDefaults()
         self.properties = DocumentProperties(title=title, creator=creator)
-        self.styles: dict[str, ParagraphStyle] = {}
+        self.paragraph_styles: dict[str, ParagraphStyle] = {}
+        self.styles = self.paragraph_styles
+        self.table_styles: dict[str, TableStyle] = {}
         self._next_image_id = 1
         self.footnotes: list[Footnote] = []
         self._next_footnote_id = 1
@@ -161,7 +165,32 @@ class Document:
             space_after=space_after,
             outline_level=outline_level,
         )
-        self.styles[style_id] = style
+        self.paragraph_styles[style_id] = style
+        return style
+
+    def add_table_style(
+        self,
+        style_id: str,
+        *,
+        name: str | None = None,
+        based_on: str = "TableNormal",
+        header_shading: str | None = None,
+        banded_rows: ShadingPair | None = None,
+        banded_columns: ShadingPair | None = None,
+        first_column_shading: str | None = None,
+        last_column_shading: str | None = None,
+    ) -> TableStyle:
+        style = TableStyle(
+            style_id=style_id,
+            name=name,
+            based_on=based_on,
+            header_shading=header_shading,
+            banded_row_shading=banded_rows,
+            banded_column_shading=banded_columns,
+            first_column_shading=first_column_shading,
+            last_column_shading=last_column_shading,
+        )
+        self.table_styles[style_id] = style
         return style
 
     def to_bytes(self) -> bytes:

@@ -14,6 +14,7 @@ Alignment = Literal["left", "center", "right", "both", "justify"]
 VerticalAlignment = Literal["top", "center", "bottom"]
 PageFieldKind = Literal["PAGE", "NUMPAGES", "SECTIONPAGES"]
 PageNumberFormat = Literal["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"]
+ShadingPair = tuple[str | None, str | None]
 
 _PAGE_NUMBER_PLACEHOLDERS: dict[str, PageFieldKind] = {
     "page": "PAGE",
@@ -254,6 +255,10 @@ class TableCell:
         self.blocks.clear()
         return self.add_paragraph(text, style=style)
 
+    def set_shading(self, color: str | None) -> TableCell:
+        self.shading = color
+        return self
+
     def add_table(
         self,
         rows: int | None = None,
@@ -337,6 +342,17 @@ class TableCell:
 class TableRow:
     cells: list[TableCell]
     height: Length | int | float | None = None
+    allow_break_across_pages: bool | None = None
+
+
+@dataclass
+class TableLook:
+    first_row: bool = False
+    last_row: bool = False
+    first_column: bool = False
+    last_column: bool = False
+    banded_rows: bool = False
+    banded_columns: bool = False
 
 
 @dataclass
@@ -350,6 +366,11 @@ class Table:
     row_count: int = 0
     col_count: int = 0
     repeat_header_rows: int = 0
+    allow_row_break_across_pages: bool | None = None
+    header_shading: str | None = None
+    banded_row_shading: ShadingPair | None = None
+    banded_column_shading: ShadingPair | None = None
+    look: TableLook = field(default_factory=TableLook)
     document: Any | None = field(default=None, repr=False, compare=False)
 
     @classmethod
@@ -391,6 +412,52 @@ class Table:
         if count > len(self.rows):
             raise ValueError("repeat header row count exceeds table row count")
         self.repeat_header_rows = count
+        if count:
+            self.look.first_row = True
+        return self
+
+    def set_allow_row_break_across_pages(self, allow: bool | None) -> Table:
+        self.allow_row_break_across_pages = allow
+        return self
+
+    def set_header_shading(self, color: str | None) -> Table:
+        self.header_shading = color
+        if color is not None:
+            self.look.first_row = True
+        return self
+
+    def set_banded_rows(self, first: str | None, second: str | None) -> Table:
+        self.banded_row_shading = (first, second)
+        self.look.banded_rows = first is not None or second is not None
+        return self
+
+    def set_banded_columns(self, first: str | None, second: str | None) -> Table:
+        self.banded_column_shading = (first, second)
+        self.look.banded_columns = first is not None or second is not None
+        return self
+
+    def set_table_look(
+        self,
+        *,
+        first_row: bool | None = None,
+        last_row: bool | None = None,
+        first_column: bool | None = None,
+        last_column: bool | None = None,
+        banded_rows: bool | None = None,
+        banded_columns: bool | None = None,
+    ) -> Table:
+        if first_row is not None:
+            self.look.first_row = first_row
+        if last_row is not None:
+            self.look.last_row = last_row
+        if first_column is not None:
+            self.look.first_column = first_column
+        if last_column is not None:
+            self.look.last_column = last_column
+        if banded_rows is not None:
+            self.look.banded_rows = banded_rows
+        if banded_columns is not None:
+            self.look.banded_columns = banded_columns
         return self
 
     def add_cell(
@@ -1110,6 +1177,18 @@ class ParagraphStyle:
     space_before: Length | int | float | None = None
     space_after: Length | int | float | None = None
     outline_level: int | None = None
+
+
+@dataclass
+class TableStyle:
+    style_id: str
+    name: str | None = None
+    based_on: str = "TableNormal"
+    header_shading: str | None = None
+    banded_row_shading: ShadingPair | None = None
+    banded_column_shading: ShadingPair | None = None
+    first_column_shading: str | None = None
+    last_column_shading: str | None = None
 
 
 @dataclass

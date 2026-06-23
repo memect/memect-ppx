@@ -121,9 +121,9 @@ class Parser:
 
             # 解析完毕，按要求输出
             if doc.params.pptx:
-                from memect.pptx import PPTXBuilder
+                from memect.pptx.builder import Builder
                 # pptx总是按页渲染，即使要求解析tree
-                data = PPTXBuilder().build(doc)
+                data = Builder().build(doc)
                 doc.write("doc.pptx", data)
 
             if doc.params.docx:
