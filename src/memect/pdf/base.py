@@ -57,6 +57,7 @@ class Backend(StrEnum):
     DEEPSEEK = auto()
     PADDLE = auto()
     GLM = auto()
+    BAIDU = auto()
 
 
 class PageType(StrEnum):
@@ -2725,8 +2726,9 @@ class KText(KObject):
         # 8. 移除转义符 (\* \# 等)
         text = re.sub(r"\\([`*_+\-!{}#.\\])", r"\1", text)
 
-        # 9. 行内公式（$xxx$）
+        # 9. 行内公式 "$xxx$" or "\(xxx\)"
         # 如何转换为文本？把公式扔了？或者不做改变？
+        # 有些上标或者下标也是使用行内公式表示
 
         return text
 
@@ -3055,7 +3057,10 @@ class KTable(KObject):
         for cell in self.cells:
             if start_row_index<=cell.row_index<end_row_index and start_col_index<=cell.col_index<end_col_index:
                 new_cells.append(cell)
-        
+        if len(new_cells)==0:
+            new_cells=[
+                KCell(self.page,self.bbox,row_index=0,col_index=0)
+            ]
         return self._from_cells(new_cells)
         
 
@@ -3377,6 +3382,16 @@ class KTable(KObject):
             raise ValueError(
                 f"第{self.page.number}页表格结构错误，缺少了行={a},缺少列={b}"
             )
+        
+        #重叠了
+        grid:list[list[Any]]=[ [None]*col_num for _ in range(row_num)]
+        for cell in cells:
+            for i in range(cell.row_index,cell.row_index+cell.row_span):
+                for j in range(cell.col_index,cell.col_index+cell.col_span):
+                    old_cell=grid[i][j]
+                    if old_cell is not None:
+                        raise ValueError(f'第{self.page.number}页表格结构错误，单元格重叠,cell1=({old_cell.row_index},{old_cell.col_index},{old_cell.row_span},{old_cell.col_span}),cell2=({cell.row_index},{cell.col_index},{cell.row_span},{cell.col_span})')
+                    grid[i][j]=cell
 
     @classmethod
     def create_table(

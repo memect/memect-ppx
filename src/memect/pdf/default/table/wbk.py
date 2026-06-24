@@ -1,5 +1,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Callable, Final, Literal, Sequence
 
@@ -8,7 +9,6 @@ from memect.base.bbox import BBox
 from memect.base.debug import XDebugger
 from memect.base.matrix import Matrix
 from memect.pdf.base import (
-    KBlock,
     KCell,
     KChar,
     KDocument,
@@ -47,6 +47,15 @@ class WBKMode(StrEnum):
     """所有的表格都使用无边框解析"""
     AUTO = "auto"
     """如果有pdf的线，且结构接近，就使用有边框的结构"""
+
+
+@dataclass
+class _CellSlot:
+    cell: _Cell
+    row0: int
+    row1: int
+    col0: int
+    col1: int
 
 
 class Parser:
@@ -253,8 +262,9 @@ class Parser:
             beautify=False
         elif table is wbk_table:
             #仅仅去掉前后空白行
+            #如果表格为完全空白，就构造一个1*1的空白表格
+            #原因为原文为图片表格，但是太模糊，ocr无法识别出文字，就是一个完全空白的表格
             table = table.strip()
-            
             pass
 
         if beautify:
@@ -673,6 +683,7 @@ class Builder:
         self._fill_missing(cells)
         self._repair_staggered_generated_cells(cells, axis="y")
         self._repair_staggered_generated_cells(cells, axis="x")
+        self._absorb_staggered_y_bands(cells)
         self._snap_to_grid(cells, axis="x")
         self._snap_to_grid(cells, axis="y")
         return cells
@@ -684,6 +695,7 @@ class Builder:
         cells: Sequence[_Cell],
     ) -> KTable:
         cells = [cell for cell in cells if cell.bbox.width > 0 and cell.bbox.height > 0]
+        self._absorb_staggered_y_bands(cells)
         
         if not cells:
             return KTable(page, table_bbox,cells=[KCell(page, table_bbox, row_index=0, col_index=0)])
@@ -696,40 +708,423 @@ class Builder:
 
         col_num = len(x_lines) - 1
         row_num = len(y_lines) - 1
-        
-
-        kcells: list[KCell] = []
-        for cell in cells:
-            col0 = self._nearest_index(cell.bbox.x0, x_lines)
-            col1 = self._nearest_index(cell.bbox.x1, x_lines)
-            y0 = self._nearest_index(cell.bbox.y0, y_lines)
-            y1 = self._nearest_index(cell.bbox.y1, y_lines)
-            if col1 <= col0:
-                col1 = col0 + 1
-            if y1 <= y0:
-                y1 = y0 + 1
-            col0 = max(0, min(col0, col_num - 1))
-            col1 = max(col0 + 1, min(col1, col_num))
-            y0 = max(0, min(y0, row_num - 1))
-            y1 = max(y0 + 1, min(y1, row_num))
-
-            row_index = row_num - y1
-            row_span = y1 - y0
-            col_span = col1 - col0
-            bbox = BBox(x_lines[col0], y_lines[y0], x_lines[col1], y_lines[y1])
-            kcells.append(
-                KCell(
-                    page,
-                    bbox,
-                    row_index=row_index,
-                    col_index=col0,
-                    row_span=row_span,
-                    col_span=col_span,
-                )
-            )
+        slots = [
+            slot
+            for cell in cells
+            if (slot := self._make_cell_slot(cell, x_lines, y_lines)) is not None
+        ]
+        slots = self._resolve_slot_overlaps(slots, row_num, col_num)
+        slots = self._ensure_slot_start_indexes(slots, row_num, col_num)
+        slots = self._fill_slot_holes(slots, row_num, col_num, x_lines, y_lines)
+        kcells = self._slots_to_kcells(page, slots, row_num, x_lines, y_lines)
 
         kcells.sort(key=lambda cell: (cell.row_index, cell.col_index))
         return KTable(page, table_bbox,cells=kcells)
+
+    def _make_cell_slot(
+        self, cell: _Cell, x_lines: list[float], y_lines: list[float]
+    ) -> _CellSlot | None:
+        col_num = len(x_lines) - 1
+        row_num = len(y_lines) - 1
+        if col_num <= 0 or row_num <= 0:
+            return None
+
+        col0 = self._nearest_index(cell.bbox.x0, x_lines)
+        col1 = self._nearest_index(cell.bbox.x1, x_lines)
+        y0 = self._nearest_index(cell.bbox.y0, y_lines)
+        y1 = self._nearest_index(cell.bbox.y1, y_lines)
+        if col1 <= col0:
+            col1 = col0 + 1
+        if y1 <= y0:
+            y1 = y0 + 1
+        col0 = max(0, min(col0, col_num - 1))
+        col1 = max(col0 + 1, min(col1, col_num))
+        y0 = max(0, min(y0, row_num - 1))
+        y1 = max(y0 + 1, min(y1, row_num))
+
+        return _CellSlot(
+            cell=cell,
+            row0=row_num - y1,
+            row1=row_num - y0,
+            col0=col0,
+            col1=col1,
+        )
+
+    def _resolve_slot_overlaps(
+        self, slots: list[_CellSlot], row_num: int, col_num: int
+    ) -> list[_CellSlot]:
+        real_slots = [slot for slot in slots if not slot.cell.generated]
+        if not real_slots:
+            real_slots = slots
+
+        real_slots = self._dedupe_slot_anchors(real_slots)
+        real_slots = self._avoid_real_anchor_conflicts(real_slots)
+
+        grid: list[list[_CellSlot | None]] = [
+            [None] * col_num for _ in range(row_num)
+        ]
+        accepted: list[_CellSlot] = []
+        for slot in sorted(real_slots, key=self._slot_order_key):
+            if self._slot_is_empty(slot):
+                continue
+            placed = slot
+            if not self._slot_rect_is_empty(grid, slot):
+                adjusted = self._largest_empty_anchor_slot(grid, slot)
+                if adjusted is None:
+                    continue
+                placed = adjusted
+            self._place_slot(grid, placed)
+            accepted.append(placed)
+        return accepted
+
+    def _dedupe_slot_anchors(self, slots: list[_CellSlot]) -> list[_CellSlot]:
+        anchors: dict[tuple[int, int], _CellSlot] = {}
+        for slot in slots:
+            key = (slot.row0, slot.col0)
+            old = anchors.get(key)
+            if old is None or self._slot_priority(slot) > self._slot_priority(old):
+                anchors[key] = slot
+        return list(anchors.values())
+
+    def _avoid_real_anchor_conflicts(self, slots: list[_CellSlot]) -> list[_CellSlot]:
+        anchors = [
+            (slot.row0, slot.col0, slot) for slot in slots if not slot.cell.generated
+        ]
+        result: list[_CellSlot] = []
+        for slot in slots:
+            if slot.cell.generated:
+                result.append(slot)
+                continue
+            forbidden = [
+                (row, col)
+                for row, col, other in anchors
+                if other is not slot
+                and slot.row0 <= row < slot.row1
+                and slot.col0 <= col < slot.col1
+            ]
+            if not forbidden:
+                result.append(slot)
+                continue
+            adjusted = self._largest_anchor_slot_without_points(slot, forbidden)
+            if adjusted is not None:
+                result.append(adjusted)
+        return result
+
+    def _largest_anchor_slot_without_points(
+        self, slot: _CellSlot, forbidden: list[tuple[int, int]]
+    ) -> _CellSlot | None:
+        best: _CellSlot | None = None
+        for row1 in range(slot.row0 + 1, slot.row1 + 1):
+            for col1 in range(slot.col0 + 1, slot.col1 + 1):
+                if any(
+                    slot.row0 <= row < row1 and slot.col0 <= col < col1
+                    for row, col in forbidden
+                ):
+                    continue
+                candidate = _CellSlot(slot.cell, slot.row0, row1, slot.col0, col1)
+                if best is None or self._slot_area(candidate) > self._slot_area(best):
+                    best = candidate
+        return best
+
+    def _largest_empty_anchor_slot(
+        self, grid: list[list[_CellSlot | None]], slot: _CellSlot
+    ) -> _CellSlot | None:
+        if grid[slot.row0][slot.col0] is not None:
+            return None
+
+        best: _CellSlot | None = None
+        for row1 in range(slot.row0 + 1, slot.row1 + 1):
+            for col1 in range(slot.col0 + 1, slot.col1 + 1):
+                candidate = _CellSlot(slot.cell, slot.row0, row1, slot.col0, col1)
+                if not self._slot_rect_is_empty(grid, candidate):
+                    continue
+                if best is None or self._slot_area(candidate) > self._slot_area(best):
+                    best = candidate
+        return best
+
+    def _ensure_slot_start_indexes(
+        self, slots: list[_CellSlot], row_num: int, col_num: int
+    ) -> list[_CellSlot]:
+        slots = list(slots)
+        changed = True
+        while changed:
+            changed = False
+            row_starts = {slot.row0 for slot in slots}
+            for row in range(row_num):
+                if row in row_starts:
+                    continue
+                candidates = [slot for slot in slots if slot.row0 < row < slot.row1]
+                if not candidates:
+                    continue
+                slot = min(candidates, key=self._slot_shrink_cost)
+                slot.row1 = row
+                changed = True
+                break
+            if changed:
+                continue
+
+            col_starts = {slot.col0 for slot in slots}
+            for col in range(col_num):
+                if col in col_starts:
+                    continue
+                candidates = [slot for slot in slots if slot.col0 < col < slot.col1]
+                if not candidates:
+                    continue
+                slot = min(candidates, key=self._slot_shrink_cost)
+                slot.col1 = col
+                changed = True
+                break
+
+        return [slot for slot in slots if not self._slot_is_empty(slot)]
+
+    def _fill_slot_holes(
+        self,
+        slots: list[_CellSlot],
+        row_num: int,
+        col_num: int,
+        x_lines: list[float],
+        y_lines: list[float],
+    ) -> list[_CellSlot]:
+        grid = self._slot_grid(slots, row_num, col_num)
+        result = list(slots)
+        for row in range(row_num):
+            for col in range(col_num):
+                if grid[row][col] is not None:
+                    continue
+                y0 = row_num - row - 1
+                y1 = row_num - row
+                cell = _Cell(
+                    BBox(x_lines[col], y_lines[y0], x_lines[col + 1], y_lines[y1]),
+                    generated=True,
+                )
+                slot = _CellSlot(cell, row, row + 1, col, col + 1)
+                result.append(slot)
+                grid[row][col] = slot
+        return result
+
+    def _slots_to_kcells(
+        self,
+        page: KPage,
+        slots: list[_CellSlot],
+        row_num: int,
+        x_lines: list[float],
+        y_lines: list[float],
+    ) -> list[KCell]:
+        kcells: list[KCell] = []
+        for slot in slots:
+            y0 = row_num - slot.row1
+            y1 = row_num - slot.row0
+            kcells.append(
+                KCell(
+                    page,
+                    BBox(
+                        x_lines[slot.col0],
+                        y_lines[y0],
+                        x_lines[slot.col1],
+                        y_lines[y1],
+                    ),
+                    row_index=slot.row0,
+                    col_index=slot.col0,
+                    row_span=slot.row1 - slot.row0,
+                    col_span=slot.col1 - slot.col0,
+                )
+            )
+        return kcells
+
+    def _slot_grid(
+        self, slots: list[_CellSlot], row_num: int, col_num: int
+    ) -> list[list[_CellSlot | None]]:
+        grid: list[list[_CellSlot | None]] = [
+            [None] * col_num for _ in range(row_num)
+        ]
+        for slot in slots:
+            self._place_slot(grid, slot)
+        return grid
+
+    def _place_slot(
+        self, grid: list[list[_CellSlot | None]], slot: _CellSlot
+    ):
+        for row in range(slot.row0, slot.row1):
+            for col in range(slot.col0, slot.col1):
+                grid[row][col] = slot
+
+    def _slot_rect_is_empty(
+        self, grid: list[list[_CellSlot | None]], slot: _CellSlot
+    ) -> bool:
+        for row in range(slot.row0, slot.row1):
+            for col in range(slot.col0, slot.col1):
+                if grid[row][col] is not None:
+                    return False
+        return True
+
+    def _slot_order_key(self, slot: _CellSlot):
+        return (
+            slot.row0,
+            slot.col0,
+            slot.cell.generated,
+            slot.cell.content_bbox is None,
+            -self._slot_area(slot),
+            -slot.cell.bbox.area,
+        )
+
+    def _slot_priority(self, slot: _CellSlot):
+        return (
+            not slot.cell.generated,
+            slot.cell.content_bbox is not None,
+            self._slot_area(slot),
+            slot.cell.bbox.area,
+        )
+
+    def _slot_shrink_cost(self, slot: _CellSlot):
+        return (
+            slot.cell.content_bbox is not None,
+            self._slot_area(slot),
+            slot.cell.bbox.area,
+        )
+
+    def _slot_area(self, slot: _CellSlot) -> int:
+        return (slot.row1 - slot.row0) * (slot.col1 - slot.col0)
+
+    def _slot_is_empty(self, slot: _CellSlot) -> bool:
+        return slot.row1 <= slot.row0 or slot.col1 <= slot.col0
+
+    def _absorb_staggered_y_bands(self, cells: list[_Cell]):
+        """把上下边界轻微错位造成的薄伪行并入相邻行。"""
+        if len(cells) < 2:
+            return
+
+        changed = True
+        while changed:
+            changed = False
+            y_lines = self._axis_lines(cells, axis="y")
+            if len(y_lines) < 3:
+                return
+
+            row_heights = [
+                y_lines[i + 1] - y_lines[i]
+                for i in range(len(y_lines) - 1)
+                if y_lines[i + 1] > y_lines[i]
+            ]
+            if not row_heights:
+                return
+            row_heights.sort()
+            median_height = row_heights[len(row_heights) // 2]
+            max_band_height = max(
+                self._edge_tolerance(cells, "y") * 2,
+                min(median_height * 0.35, 14.0),
+            )
+
+            for line_index in range(1, len(y_lines) - 2):
+                band_height = y_lines[line_index + 1] - y_lines[line_index]
+                if band_height <= 0 or band_height > max_band_height:
+                    continue
+                if not self._looks_like_staggered_y_band(
+                    cells, y_lines, line_index, median_height
+                ):
+                    continue
+                if self._merge_staggered_y_band(cells, y_lines, line_index):
+                    changed = True
+                    break
+
+    def _looks_like_staggered_y_band(
+        self,
+        cells: list[_Cell],
+        y_lines: list[float],
+        line_index: int,
+        median_height: float,
+    ) -> bool:
+        y0 = y_lines[line_index]
+        y1 = y_lines[line_index + 1]
+        full_band_cells = [
+            cell
+            for cell in cells
+            if abs(cell.bbox.y0 - y0) < 0.5 and abs(cell.bbox.y1 - y1) < 0.5
+        ]
+        real_full_band_cells = [cell for cell in full_band_cells if not cell.generated]
+        if real_full_band_cells:
+            return False
+
+        crossing_cells = [
+            cell
+            for cell in cells
+            if cell.bbox.y0 < y0 - 0.5 and cell.bbox.y1 > y1 + 0.5
+        ]
+        adjacent_cells = [
+            cell
+            for cell in cells
+            if abs(cell.bbox.y1 - y0) < 0.5 or abs(cell.bbox.y0 - y1) < 0.5
+        ]
+        if crossing_cells and adjacent_cells:
+            return True
+
+        lower_supporters = self._y_line_real_supporters(cells, y0)
+        upper_supporters = self._y_line_real_supporters(cells, y1)
+        if lower_supporters and upper_supporters:
+            return True
+
+        band_content = [
+            cell
+            for cell in full_band_cells
+            if cell.content_bbox is not None
+            and cell.content_bbox.height >= median_height * 0.35
+        ]
+        return not band_content and bool(full_band_cells)
+
+    def _y_line_real_supporters(self, cells: list[_Cell], line: float) -> list[_Cell]:
+        return [
+            cell
+            for cell in cells
+            if not cell.generated
+            and (abs(cell.bbox.y0 - line) < 0.5 or abs(cell.bbox.y1 - line) < 0.5)
+        ]
+
+    def _merge_staggered_y_band(
+        self, cells: list[_Cell], y_lines: list[float], line_index: int
+    ) -> bool:
+        lower_line = y_lines[line_index]
+        upper_line = y_lines[line_index + 1]
+
+        lower_score = self._y_line_score(cells, lower_line)
+        upper_score = self._y_line_score(cells, upper_line)
+        target = lower_line if lower_score >= upper_score else upper_line
+        source = upper_line if target == lower_line else lower_line
+
+        old_bboxes = [(cell, cell.bbox) for cell in cells]
+        changed = False
+        for cell in cells:
+            if abs(cell.bbox.y0 - source) < 0.5:
+                before = cell.bbox
+                self._adjust_edge(cell, "y0", target)
+                changed = changed or cell.bbox != before
+            if abs(cell.bbox.y1 - source) < 0.5:
+                before = cell.bbox
+                self._adjust_edge(cell, "y1", target)
+                changed = changed or cell.bbox != before
+
+        if not changed or any(cell.bbox.height <= 0 for cell, _ in old_bboxes):
+            for cell, bbox in old_bboxes:
+                cell.bbox = bbox
+            return False
+        return True
+
+    def _y_line_score(self, cells: list[_Cell], line: float) -> tuple[int, float]:
+        supporters = [
+            cell
+            for cell in cells
+            if abs(cell.bbox.y0 - line) < 0.5 or abs(cell.bbox.y1 - line) < 0.5
+        ]
+        real_count = sum(0 if cell.generated else 1 for cell in supporters)
+        intervals = sorted((cell.bbox.x0, cell.bbox.x1) for cell in supporters)
+        coverage = 0.0
+        end: float | None = None
+        for x0, x1 in intervals:
+            if end is None or x0 > end:
+                coverage += x1 - x0
+                end = x1
+            elif x1 > end:
+                coverage += x1 - end
+                end = x1
+        return real_count, coverage
 
 
     def _snap_outlier_edges(self, cells: list[_Cell], *, axis: Literal["x", "y"]):

@@ -595,6 +595,11 @@ settings: dict[str, Any] = {
                 },
             },
         },
+        "baidu":{
+            "model":{
+                "base_url":get_value("ppx_baidu_url","http://127.0.0.1:4003/v1"),
+            }
+        },
         "default": {
             # pdf解析的配置
             "pdf": {

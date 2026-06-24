@@ -162,6 +162,8 @@ def _parse_llm(s: str) -> dict[str, Any]:
             name = "deepseek"
         elif "glm" in id_:
             name = "glm"
+        elif "Unlimited-OCR" in id_:
+            name='baidu'
         else:
             raise ValueError(f"不支持的模型:{id_}，id需要包含:deepseek,paddle,glm")
         return {

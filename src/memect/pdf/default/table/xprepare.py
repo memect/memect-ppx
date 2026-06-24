@@ -30,7 +30,6 @@ class PreProcessor:
             #同页跨栏
             #跨页跨栏
             #跨页不跨栏
-
             objects = page.objects
             
             pass

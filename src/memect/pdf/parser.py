@@ -22,6 +22,7 @@ from memect.base import utils
 from memect.base.config import MPInit, get_settings
 from memect.base.task import Runner, StoppedError, Task
 from memect.base.utils import MyBaseModel, SafeExecutor
+from memect.pdf.llm.baidu import Baidu, BaiduArgs
 from memect.pdf.x.xtree import XTreeParser, XTreeParserArgs
 
 from .base import Backend, KDocument, KDocumentFactory, ParseMode
@@ -39,6 +40,7 @@ class ParserArgs(MyBaseModel):
     deepseek: DeepseekArgs = Field(default_factory=DeepseekArgs)
     paddle: PaddleArgs = Field(default_factory=PaddleArgs)
     glm: GLMArgs = Field(default_factory=GLMArgs)
+    baidu:BaiduArgs=Field(default_factory=BaiduArgs)
     default: DefaultParserArgs = Field(default_factory=DefaultParserArgs)
     tree: XTreeParserArgs = Field(default_factory=XTreeParserArgs)
 
@@ -65,6 +67,7 @@ class Parser:
         args = ParserArgs.create(args)
         self._pdf2image = Pdf2Image(args.pdf2image)
         self._deepseek = Deepseek(args.deepseek)
+        self._baidu = Baidu(args.baidu)
         self._paddle = Paddle(self._manager, args.paddle)
         self._glm = GLM(self._manager, args.glm)
         self._default = DefaultParser(self._manager, args.default)
@@ -110,6 +113,8 @@ class Parser:
                 self._paddle.parse(doc)
             elif backend == Backend.GLM:
                 self._glm.parse(doc)
+            elif backend == Backend.BAIDU:
+                self._baidu.parse(doc)
             elif backend == Backend.DEFAULT:
                 self._default.parse(doc)
             else:
