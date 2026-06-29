@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from memect.pdf.base import KCell, KColor, KDocument, KRect, KTable, PageType
+from .base import KCell, KColor, KDocument, KRect, KTable
 
 
 class TableStyleParser:

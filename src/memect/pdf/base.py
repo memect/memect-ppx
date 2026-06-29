@@ -2802,8 +2802,8 @@ class KTable(KObject):
 
         self.grid = self._create_grid()
 
-        self.intent:TableIntent = TableIntent.DATA
-        """表示该表格的用途，如：layout"""
+        #self.intent:TableIntent = TableIntent.DATA
+        #"""表示该表格的用途，如：layout"""
 
         self.row_colors:list[KColor]=[]
         self.col_colors:list[KColor]=[]
@@ -2823,8 +2823,14 @@ class KTable(KObject):
     
     def is_layout(self)->bool:
         """表示表格的意图是布局"""
-        return self.intent==TableIntent.LAYOUT
+        return self.subtype=='layout'
 
+    def is_wbk(self)->bool:
+        return self.subtype=='wbk'
+    
+    def is_ybk(self)->bool:
+        return self.subtype=='ybk'
+    
     @cached_property
     def fullpath(self) -> Path:
         """截图的完整路径"""
@@ -3061,7 +3067,7 @@ class KTable(KObject):
             new_cells=[
                 KCell(self.page,self.bbox,row_index=0,col_index=0)
             ]
-        return self._from_cells(new_cells)
+        return self._from_cells(new_cells,keep_original_cell=False)
         
 
     def get_stripped_size(self)->tuple[int,int]:
@@ -3100,7 +3106,7 @@ class KTable(KObject):
                 col_num-=1
         return (row_num,col_num)
 
-    def _from_cells(self,cells:Sequence["KCell"])->Self:
+    def _from_cells(self,cells:Sequence["KCell"],*,keep_original_cell:bool=True)->Self:
         """根据选择的部分单元格构造一个新的表格，重新计算单元格"""
         h_lines,v_lines = self._get_lines(cells)
         grid = Grid([line.bbox for line in h_lines+v_lines])
@@ -3108,6 +3114,8 @@ class KTable(KObject):
         new_cells:list[KCell]=[]
         for c1,c2 in zip(cells,grid.cells):
             cell = c1.copy(row_index=c2.row_index,col_index=c2.col_index,row_span=c2.row_span,col_span=c2.col_span)
+            if not keep_original_cell:
+                cell.original_cell=None
             new_cells.append(cell)
         return self.__class__(self.page,grid.bbox,cells=new_cells,subtype=self.subtype)
 
@@ -3356,6 +3364,45 @@ class KTable(KObject):
 
         adjust_y()
         adjust_x()
+
+    def align(self,*,x_axis:Sequence[float]|None=None,y_axis:Sequence[float]|None=None,force:bool=False)->bool:
+        """根据新的坐标调整单元格的位置，返回False表示无法调整
+        x_axis:[x0,x1,x2,...] 
+        y_axis:[y0,y1,y2,...]
+        force: True表示强制设置，False表示如果新的单元格区域小于内容，就不调整
+
+        返回True表示调整了，返回False表示没有调整
+        """
+        if x_axis is not None:
+            assert len(x_axis)==self.col_num+1
+        
+        if y_axis is not None:
+            assert len(y_axis)==self.row_num+1
+
+        new_bboxes:list[BBox]=[]
+        for cell in self.cells:
+            x0=x_axis[cell.col_index] if x_axis else None
+            x1=x_axis[cell.col_index+cell.col_span] if x_axis else None
+            y0=y_axis[cell.row_index] if y_axis else None
+            y1=y_axis[cell.row_index+cell.row_span] if y_axis else None
+            b = cell.bbox.adjust(x0=x0,x1=x1,y0=y0,y1=y1)
+            cb = cell.content_bbox
+            if force or cb is None or b.get([cb],ratio=0.8):
+                #表示还是满足的，记录下来
+                new_bboxes.append(b)
+            else:
+                break
+        
+        if len(new_bboxes)!=len(self.cells):
+            return False
+        
+        #TODO cell.bbox不允许修改
+        for cell,bbox in zip(self.cells,new_bboxes):
+            cell.bbox = bbox   
+        #TODO 这个也不允许修改
+        self.bbox=BBox.join(new_bboxes)
+        return True
+
 
     def _validate(self, cells: Sequence["KCell"]):
         row_num = self.row_num

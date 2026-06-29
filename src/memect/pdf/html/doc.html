@@ -221,13 +221,13 @@
             }
         }
 
-        .page[data-type="image"]{
+        .page[data-type="image"] {
             outline-color: #81d784;
         }
-        .page[data-type="pdf"]{
 
-        }
-        .page[data-type="hybrid"]{
+        .page[data-type="pdf"] {}
+
+        .page[data-type="hybrid"] {
             outline-color: #8e78e0;
         }
 
@@ -269,8 +269,13 @@
                 }
             }
 
-            &[data-subtype="wbk"] >tbody > tr > td {
+            &[data-subtype="wbk"]>tbody>tr>td {
                 border-style: dashed;
+            }
+
+            &[data-subtype="layout"]>tbody>tr>td {
+                border-style: dashed;
+                border-color: #1d4ed8;
             }
 
             &:hover {
@@ -281,11 +286,11 @@
                 background-color: #81d784;
             }
 
-            &[data-merged] td[data-cell-merged="true"]{
+            &[data-merged] td[data-cell-merged="true"] {
                 background-color: lightblue;
             }
 
-            & td:hover{
+            & td:hover {
                 background-color: #ccc;
             }
         }
@@ -322,7 +327,7 @@
             font-size: 10px;
             overflow: hidden;
 
-            &:hover{
+            &:hover {
                 outline: 2px solid sandybrown;
             }
         }
@@ -396,8 +401,8 @@
         .footnote {
             position: absolute;
             box-sizing: border-box;
-            outline:dotted blue 2px;
-            
+            outline: dotted blue 2px;
+
         }
 
         .unknown {
@@ -439,7 +444,7 @@
 
         [data-merged] {
             outline-style: dashed !important;
-            outline-color: yellow ;
+            outline-color: yellow;
         }
     </style>
 

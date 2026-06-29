@@ -1,10 +1,14 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Any, Callable, Final, Literal, Sequence
+from enum import StrEnum, auto
+from typing import Any, Callable, Final, Literal, Self, Sequence
 
-from memect.base import lists
+import PIL
+import PIL.Image
+import PIL.ImageDraw
+
+from memect.base import images, lists
 from memect.base.bbox import BBox
 from memect.base.debug import XDebugger
 from memect.base.matrix import Matrix
@@ -28,10 +32,10 @@ from .ybk import YBKMode
 class _Cell:
     """目的是为了方便调整bbox，而且知道原对象"""
 
-    def __init__(self, source: Any, *, generated: bool = False):
+    def __init__(self, source: BBox, *, generated: bool = False):
         super().__init__()
 
-        self.bbox: BBox = source.bbox.large if hasattr(source, "bbox") else source
+        self.bbox: BBox = source.large #if hasattr(source, "bbox") else source
         self.original_bbox: Final = self.bbox
         """模型原始bbox，用于后续判断边界被吸附前的错位关系"""
         self.content_bbox:BBox|None=None
@@ -39,6 +43,12 @@ class _Cell:
         self.source: Final = source
         self.generated: Final = generated
         """表示这个cell是Builder补出来的空格，不是模型直接检测出来的格子"""
+    
+    def copy(self)->Self:
+        obj = self.__class__(self.source,generated=self.generated)
+        obj.content_bbox=self.content_bbox
+        return obj
+        
 
 
 
@@ -56,6 +66,14 @@ class _CellSlot:
     row1: int
     col0: int
     col1: int
+
+
+type _EdgeIndex = Literal[0, 1, 2, 3]
+
+X0: Final[_EdgeIndex] = 0
+Y0: Final[_EdgeIndex] = 1
+X1: Final[_EdgeIndex] = 2
+Y1: Final[_EdgeIndex] = 3
 
 
 class Parser:
@@ -90,8 +108,12 @@ class Parser:
         def parse_page(page: KPage):
             return self._parse_page(page, mode=mode)
 
-        self._table.parse(doc, self._table_key, handler=get_tables)
+        self._table.parse(doc, self._table_key, handler=get_tables)        
         self._do(parse_page, doc.working_pages, max_workers=max_workers)
+        #按页解析完毕后，再考虑跨页/跨栏表格的对齐
+        #不能够在这里执行，因为还需要先建立阅读顺序
+        
+
 
     def parse_one(self,page:KPage,bbox:BBox,*,use_vobj:bool=False,use_char:bool=True,add:bool=False,clear:bool=False,name:str='custom',index:int=0)->KTable:
         """把页面的指定区域解析为无边框表格
@@ -204,19 +226,17 @@ class Parser:
                 #如果ybk列span多的，就信任无边框？
                 wbk_ok=0
                 ybk_ok=0
-                ok=0
                 for i in range(row_num):
                     row1 = ybk.get_row(i)
                     row2 = wbk.get_row(i)
-                    if len(row1)==len(row2):
-                        ok+=1
-                    elif len(row1)==1 and len(row2)==col_num:
-                        wbk_ok+=1
-                    elif len(row2)==1 and len(row1)==col_num:
+                    if len(row1)>=len(row2):
                         ybk_ok+=1
+                    else:
+                        wbk_ok+=1
                 
                 if wbk_ok-ybk_ok>=2:
                     return False
+                
             
             if ybk.row_num >= row_num and ybk.col_num >= col_num:
                 return True
@@ -265,7 +285,8 @@ class Parser:
             #如果表格为完全空白，就构造一个1*1的空白表格
             #原因为原文为图片表格，但是太模糊，ocr无法识别出文字，就是一个完全空白的表格
             table = table.strip()
-            pass
+            table.cache['cells']=wbk_table.cache.pop('cells')
+            table.cache['result']=result
 
         if beautify:
             self._beautify(table)
@@ -314,19 +335,30 @@ class Parser:
         self._expand_cells(cells, list(result.pdf_figures), [0.7, 0.5])
         self._expand_cells(cells, list(result.vobjects), [0.7, 0.5])
         self._expand_cells(cells,list(result.objects),[0.8])
-
         #有时候识别的区域过小，丢失一部分字符，这里再次纠正
         #self._expand_cells(cells,chars,[0.7],dx=10,dy=0)
         expanded_cells:Final=[c.bbox for c in cells]
         self._adjust_items(cells)
-        cells = Builder().build(cells)
-        self._adjust_items(cells)
+        adjusted2_cells:Final=[c.bbox for c in cells]
+        #TODO 如果识别的单元格少了左边或者右边的列，怎么补充？
+        #可以根据当前表格区域包含的字符/图片，使用规则先做一个初步的表格解析
+        #然后再补充？这样又增加了算法的复杂度
+
+        #记录当前的cells，在跨页/跨栏的表格合并中，需要再计算一次列
+        #不使用_Builder().build(cells)后的
+        cache_cells:Final = [c.copy() for c in cells]
+        cells = _Builder().build(cells)
+        #或者记录这些cells
+        #没有必要再执行一次了
+        #self._adjust_items(cells)
         if cells:
+            #TODO 如果识别的单元格少了，如：少了左边/右边的列，bbox就会变小
             bbox = BBox.join2(cells)
-        table = Builder().make_table(page,bbox,cells)
+        table = _Builder().make_table(page,bbox,cells)
         table.vobject = vobject
         table.subtype = "wbk"
         table.cache["result"] = result
+        table.cache['cells']=cache_cells
 
         if steps is not None:
             steps.extend(
@@ -342,6 +374,7 @@ class Parser:
                     (f"raw_cells={len(raw_cells)}", raw_cells),
                     (f"adjusted_cells={len(adjusted_cells)}", adjusted_cells),
                     (f'expanded_cells={len(expanded_cells)}',expanded_cells),
+                    (f'adjusted2_cells={len(adjusted2_cells)}',adjusted2_cells),
                     (f"cells={len(cells)}", cells),
                     (f"wbk=({table.row_num},{table.col_num})",table.get_lines2())
                 ]
@@ -655,7 +688,7 @@ class Parser:
                     pass
 
 
-class Builder:
+class _Builder:
     def __init__(self):
         super().__init__()
 
@@ -1094,11 +1127,11 @@ class Builder:
         for cell in cells:
             if abs(cell.bbox.y0 - source) < 0.5:
                 before = cell.bbox
-                self._adjust_edge(cell, "y0", target)
+                self._adjust_edge(cell, Y0, target)
                 changed = changed or cell.bbox != before
             if abs(cell.bbox.y1 - source) < 0.5:
                 before = cell.bbox
-                self._adjust_edge(cell, "y1", target)
+                self._adjust_edge(cell, Y1, target)
                 changed = changed or cell.bbox != before
 
         if not changed or any(cell.bbox.height <= 0 for cell, _ in old_bboxes):
@@ -1129,11 +1162,11 @@ class Builder:
 
     def _snap_outlier_edges(self, cells: list[_Cell], *, axis: Literal["x", "y"]):
         """把孤立边界吸附到相邻稳定边界，避免形成很窄的伪行/列。"""
-        lo_attr, hi_attr = self._axis_attrs(axis)
+        lo_idx, hi_idx = self._axis_indexes(axis)
         tol = self._edge_tolerance(cells, axis)
         clusters = self._cluster_edges(
-            [(getattr(cell.bbox, lo_attr), cell, lo_attr) for cell in cells]
-            + [(getattr(cell.bbox, hi_attr), cell, hi_attr) for cell in cells],
+            [(cell.bbox[lo_idx], cell, lo_idx) for cell in cells]
+            + [(cell.bbox[hi_idx], cell, hi_idx) for cell in cells],
             tol,
         )
         if len(clusters) < 3:
@@ -1164,16 +1197,16 @@ class Builder:
 
             ratio = (value - prev_value) / (next_value - prev_value)
             target = next_value if ratio > 0.5 else prev_value
-            for _, cell, attr in members:
-                self._adjust_edge(cell, attr, target)
+            for _, cell, edge_idx in members:
+                self._adjust_edge(cell, edge_idx, target)
 
     def _snap_to_grid(self, cells: list[_Cell], *, axis: Literal["x", "y"]):
         """把所有边界吸附到聚类后的网格线。"""
-        lo_attr, hi_attr = self._axis_attrs(axis)
+        lo_idx, hi_idx = self._axis_indexes(axis)
         tol = self._edge_tolerance(cells, axis)
         clusters = self._cluster_edges(
-            [(getattr(cell.bbox, lo_attr), cell, lo_attr) for cell in cells]
-            + [(getattr(cell.bbox, hi_attr), cell, hi_attr) for cell in cells],
+            [(cell.bbox[lo_idx], cell, lo_idx) for cell in cells]
+            + [(cell.bbox[hi_idx], cell, hi_idx) for cell in cells],
             tol,
         )
         if len(clusters) < 2:
@@ -1181,12 +1214,12 @@ class Builder:
 
         lines = [value for value, _ in clusters]
         for cell in cells:
-            lo = getattr(cell.bbox, lo_attr)
-            hi = getattr(cell.bbox, hi_attr)
+            lo = cell.bbox[lo_idx]
+            hi = cell.bbox[hi_idx]
             new_lo = min(lines, key=lambda line: abs(line - lo))
             new_hi = min(lines, key=lambda line: abs(line - hi))
-            self._adjust_edge(cell, lo_attr, new_lo)
-            self._adjust_edge(cell, hi_attr, new_hi)
+            self._adjust_edge(cell, lo_idx, new_lo)
+            self._adjust_edge(cell, hi_idx, new_hi)
 
     def _align_neighbor_y_edges(self, cells: list[_Cell]):
         """对齐相邻列中应属于同一行的上下边界。"""
@@ -1195,7 +1228,7 @@ class Builder:
 
         tolerance = self._neighbor_y_tolerance(cells)
         x_tolerance = self._edge_tolerance(cells, "x")
-        for attr in ("y0", "y1"):
+        for edge_idx in (Y0, Y1):
             groups: list[set[int]] = []
             edge_to_group: dict[int, int] = {}
 
@@ -1226,7 +1259,7 @@ class Builder:
                     if not self._same_row_band(c1.bbox, c2.bbox):
                         continue
                     if (
-                        abs(getattr(c1.bbox, attr) - getattr(c2.bbox, attr))
+                        abs(c1.bbox[edge_idx] - c2.bbox[edge_idx])
                         > tolerance
                     ):
                         continue
@@ -1235,10 +1268,10 @@ class Builder:
             for group in groups:
                 if len(group) < 2:
                     continue
-                target = self._best_y_edge_target(cells, group, attr, tolerance)
+                target = self._best_y_edge_target(cells, group, edge_idx, tolerance)
                 old_bboxes = [(cells[i], cells[i].bbox) for i in group]
                 for i in group:
-                    self._adjust_edge(cells[i], attr, target)
+                    self._adjust_edge(cells[i], edge_idx, target)
                 if any(cell.bbox.height <= 0 for cell, _ in old_bboxes):
                     for cell, bbox in old_bboxes:
                         cell.bbox = bbox
@@ -1271,16 +1304,16 @@ class Builder:
         self,
         cells: list[_Cell],
         group: set[int],
-        attr: str,
+        edge_idx: _EdgeIndex,
         tolerance: float,
     ) -> float:
-        candidates = [getattr(cells[i].bbox, attr) for i in group]
+        candidates = [cells[i].bbox[edge_idx] for i in group]
 
         def score(value: float) -> tuple[int, float]:
             supporters = [
                 cell
                 for cell in cells
-                if abs(getattr(cell.bbox, attr) - value) <= tolerance
+                if abs(cell.bbox[edge_idx] - value) <= tolerance
             ]
             intervals = sorted((cell.bbox.x0, cell.bbox.x1) for cell in supporters)
             coverage = 0.0
@@ -1352,6 +1385,10 @@ class Builder:
                     cells, covered, x_lines, y_lines, r, c, r_end, c_end
                 ):
                     continue
+                if self._absorb_missing_gap(
+                    cells, covered, x_lines, y_lines, r, c, r_end, c_end
+                ):
+                    continue
                 cells.append(
                     _Cell(
                         BBox(x_lines[c], y_lines[r], x_lines[c_end], y_lines[r_end]),
@@ -1397,29 +1434,29 @@ class Builder:
         gap: _Cell,
         *,
         axis: Literal["x", "y"],
-    ) -> tuple[_Cell, str, float] | None:
-        lo_attr, hi_attr, cross_lo_attr, cross_hi_attr = self._stagger_axis_attrs(
+    ) -> tuple[_Cell, _EdgeIndex, float] | None:
+        lo_idx, hi_idx, cross_lo_idx, cross_hi_idx = self._stagger_axis_indexes(
             axis
         )
         tolerance = self._edge_tolerance(cells, axis)
-        candidates: list[tuple[float, _Cell, str, float]] = []
+        candidates: list[tuple[float, _Cell, _EdgeIndex, float]] = []
 
         for cell in cells:
             if cell is gap or cell.generated:
                 continue
             if (
                 self._axis_overlap_ratio(
-                    cell.bbox, gap.bbox, cross_lo_attr, cross_hi_attr
+                    cell.bbox, gap.bbox, cross_lo_idx, cross_hi_idx
                 )
                 < 0.8
             ):
                 continue
 
             if (
-                abs(getattr(cell.bbox, lo_attr) - getattr(gap.bbox, hi_attr))
+                abs(cell.bbox[lo_idx] - gap.bbox[hi_idx])
                 <= tolerance
             ):
-                boundary = getattr(cell.original_bbox, lo_attr)
+                boundary = cell.original_bbox[lo_idx]
                 if self._has_stagger_cross_evidence(
                     cells,
                     gap,
@@ -1431,15 +1468,15 @@ class Builder:
                         (
                             self._stagger_merge_score(cell, gap, axis),
                             cell,
-                            lo_attr,
-                            getattr(gap.bbox, lo_attr),
+                            lo_idx,
+                            gap.bbox[lo_idx],
                         )
                     )
             if (
-                abs(getattr(cell.bbox, hi_attr) - getattr(gap.bbox, lo_attr))
+                abs(cell.bbox[hi_idx] - gap.bbox[lo_idx])
                 <= tolerance
             ):
-                boundary = getattr(cell.original_bbox, hi_attr)
+                boundary = cell.original_bbox[hi_idx]
                 if self._has_stagger_cross_evidence(
                     cells,
                     gap,
@@ -1451,8 +1488,8 @@ class Builder:
                         (
                             self._stagger_merge_score(cell, gap, axis),
                             cell,
-                            hi_attr,
-                            getattr(gap.bbox, hi_attr),
+                            hi_idx,
+                            gap.bbox[hi_idx],
                         )
                     )
 
@@ -1470,7 +1507,7 @@ class Builder:
         axis: Literal["x", "y"],
         ignore: _Cell,
     ) -> bool:
-        lo_attr, hi_attr, cross_lo_attr, cross_hi_attr = self._stagger_axis_attrs(axis)
+        lo_idx, hi_idx, cross_lo_idx, cross_hi_idx = self._stagger_axis_indexes(axis)
         tolerance = self._edge_tolerance(cells, axis)
         cross_tolerance = self._edge_tolerance(cells, "x" if axis == "y" else "y")
 
@@ -1478,20 +1515,20 @@ class Builder:
             if cell is gap or cell is ignore:
                 continue
             if not (
-                getattr(cell.bbox, lo_attr) < boundary - tolerance
-                and getattr(cell.bbox, hi_attr) > boundary + tolerance
+                cell.bbox[lo_idx] < boundary - tolerance
+                and cell.bbox[hi_idx] > boundary + tolerance
             ):
                 continue
             if (
                 self._axis_overlap_ratio(
-                    cell.bbox, gap.bbox, cross_lo_attr, cross_hi_attr
+                    cell.bbox, gap.bbox, cross_lo_idx, cross_hi_idx
                 )
                 > 0.15
             ):
                 continue
             cross_gap = max(
-                getattr(gap.bbox, cross_lo_attr) - getattr(cell.bbox, cross_hi_attr),
-                getattr(cell.bbox, cross_lo_attr) - getattr(gap.bbox, cross_hi_attr),
+                gap.bbox[cross_lo_idx] - cell.bbox[cross_hi_idx],
+                cell.bbox[cross_lo_idx] - gap.bbox[cross_hi_idx],
                 0,
             )
             if cross_gap <= cross_tolerance:
@@ -1501,9 +1538,9 @@ class Builder:
     def _stagger_merge_score(
         self, cell: _Cell, gap: _Cell, axis: Literal["x", "y"]
     ) -> float:
-        lo_attr, hi_attr, _, _ = self._stagger_axis_attrs(axis)
-        cell_size = getattr(cell.bbox, hi_attr) - getattr(cell.bbox, lo_attr)
-        gap_size = getattr(gap.bbox, hi_attr) - getattr(gap.bbox, lo_attr)
+        lo_idx, hi_idx, _, _ = self._stagger_axis_indexes(axis)
+        cell_size = cell.bbox[hi_idx] - cell.bbox[lo_idx]
+        gap_size = gap.bbox[hi_idx] - gap.bbox[lo_idx]
         content_bonus = 1.0 if cell.content_bbox is not None else 0.0
         return cell_size - gap_size + content_bonus
 
@@ -1534,26 +1571,24 @@ class Builder:
         self,
         b1: BBox,
         b2: BBox,
-        lo_attr: str,
-        hi_attr: str,
+        lo_idx: _EdgeIndex,
+        hi_idx: _EdgeIndex,
     ) -> float:
-        overlap = min(getattr(b1, hi_attr), getattr(b2, hi_attr)) - max(
-            getattr(b1, lo_attr), getattr(b2, lo_attr)
-        )
+        overlap = min(b1[hi_idx], b2[hi_idx]) - max(b1[lo_idx], b2[lo_idx])
         if overlap <= 0:
             return 0.0
         size = min(
-            getattr(b1, hi_attr) - getattr(b1, lo_attr),
-            getattr(b2, hi_attr) - getattr(b2, lo_attr),
+            b1[hi_idx] - b1[lo_idx],
+            b2[hi_idx] - b2[lo_idx],
         )
         return float(overlap / size) if size > 0 else 0.0
 
-    def _stagger_axis_attrs(
+    def _stagger_axis_indexes(
         self, axis: Literal["x", "y"]
-    ) -> tuple[str, str, str, str]:
+    ) -> tuple[_EdgeIndex, _EdgeIndex, _EdgeIndex, _EdgeIndex]:
         if axis == "y":
-            return "y0", "y1", "x0", "x1"
-        return "x0", "x1", "y0", "y1"
+            return Y0, Y1, X0, X1
+        return X0, X1, Y0, Y1
 
     def _align_missing(
         self,
@@ -1576,18 +1611,10 @@ class Builder:
         plans = [
             plan
             for plan in (
-                self._alignment_plan(
-                    cells, x_lines, y_lines, r0, c0, r1, c1, "y1"
-                ),
-                self._alignment_plan(
-                    cells, x_lines, y_lines, r0, c0, r1, c1, "y0"
-                ),
-                self._alignment_plan(
-                    cells, x_lines, y_lines, r0, c0, r1, c1, "x1"
-                ),
-                self._alignment_plan(
-                    cells, x_lines, y_lines, r0, c0, r1, c1, "x0"
-                ),
+                self._alignment_plan(cells, x_lines, y_lines, r0, c0, r1, c1, Y1),
+                self._alignment_plan(cells, x_lines, y_lines, r0, c0, r1, c1, Y0),
+                self._alignment_plan(cells, x_lines, y_lines, r0, c0, r1, c1, X1),
+                self._alignment_plan(cells, x_lines, y_lines, r0, c0, r1, c1, X0),
             )
             if plan is not None
         ]
@@ -1596,10 +1623,12 @@ class Builder:
 
         for _, adjustments in sorted(plans, key=lambda item: item[0]):
             old_bboxes = [(cell, cell.bbox) for cell, _, _ in adjustments]
-            for cell, attr, target in adjustments:
-                self._adjust_edge(cell, attr, target)
-            attr = adjustments[0][1]
-            if self._removed_gap_line(cells, x_lines, y_lines, attr, r0, c0, r1, c1):
+            for cell, edge_idx, target in adjustments:
+                self._adjust_edge(cell, edge_idx, target)
+            edge_idx = adjustments[0][1]
+            if self._removed_gap_line(
+                cells, x_lines, y_lines, edge_idx, r0, c0, r1, c1
+            ):
                 for rr in range(r0, r1):
                     for cc in range(c0, c1):
                         covered[rr][cc] = True
@@ -1607,6 +1636,156 @@ class Builder:
             for cell, old_bbox in old_bboxes:
                 cell.bbox = old_bbox
         return False
+
+    def _absorb_missing_gap(
+        self,
+        cells: list[_Cell],
+        covered: list[list[bool]],
+        x_lines: list[float],
+        y_lines: list[float],
+        r0: int,
+        c0: int,
+        r1: int,
+        c1: int,
+    ) -> bool:
+        bbox = BBox(x_lines[c0], y_lines[r0], x_lines[c1], y_lines[r1])
+        cols = len(x_lines) - 1
+        rows = len(y_lines) - 1
+        if not self._is_thin_missing_gap(bbox, x_lines, y_lines):
+            return False
+
+        if bbox.height <= bbox.width:
+            plans = [
+                self._absorb_horizontal_gap_plan(
+                    cells, x_lines, y_lines, r0, c0, r1, c1, "upper"
+                ),
+                self._absorb_horizontal_gap_plan(
+                    cells, x_lines, y_lines, r0, c0, r1, c1, "lower"
+                ),
+            ]
+        else:
+            plans = [
+                self._absorb_vertical_gap_plan(
+                    cells, x_lines, y_lines, r0, c0, r1, c1, "left"
+                ),
+                self._absorb_vertical_gap_plan(
+                    cells, x_lines, y_lines, r0, c0, r1, c1, "right"
+                ),
+            ]
+        plans = [plan for plan in plans if plan is not None]
+        if not plans:
+            return False
+
+        _, adjustments = min(plans, key=lambda item: item[0])
+        old_bboxes = [(cell, cell.bbox) for cell, _, _ in adjustments]
+        for cell, edge_idx, target in adjustments:
+            self._adjust_edge(cell, edge_idx, target)
+        if any(cell.bbox.width <= 0 or cell.bbox.height <= 0 for cell, _ in old_bboxes):
+            for cell, old_bbox in old_bboxes:
+                cell.bbox = old_bbox
+            return False
+
+        r1 = min(r1, rows)
+        c1 = min(c1, cols)
+        for rr in range(r0, r1):
+            for cc in range(c0, c1):
+                covered[rr][cc] = True
+        return True
+
+    def _is_thin_missing_gap(
+        self, bbox: BBox, x_lines: list[float], y_lines: list[float]
+    ) -> bool:
+        cols = len(x_lines) - 1
+        rows = len(y_lines) - 1
+        if cols <= 0 or rows <= 0:
+            return False
+        col_widths = sorted(
+            x_lines[i + 1] - x_lines[i]
+            for i in range(cols)
+            if x_lines[i + 1] > x_lines[i]
+        )
+        row_heights = sorted(
+            y_lines[i + 1] - y_lines[i]
+            for i in range(rows)
+            if y_lines[i + 1] > y_lines[i]
+        )
+        if not col_widths or not row_heights:
+            return False
+        median_col_width = col_widths[len(col_widths) // 2]
+        median_row_height = row_heights[len(row_heights) // 2]
+        return (
+            bbox.height <= max(3.0, min(median_row_height * 0.25, 12.0))
+            or bbox.width <= max(3.0, min(median_col_width * 0.18, 12.0))
+        )
+
+    def _absorb_horizontal_gap_plan(
+        self,
+        cells: list[_Cell],
+        x_lines: list[float],
+        y_lines: list[float],
+        r0: int,
+        c0: int,
+        r1: int,
+        c1: int,
+        side: Literal["upper", "lower"],
+    ) -> tuple[float, list[tuple[_Cell, _EdgeIndex, float]]] | None:
+        if side == "upper":
+            if r1 >= len(y_lines) - 1:
+                return None
+            line_index = r1
+            edge_idx = Y0
+            target = y_lines[r0]
+        else:
+            if r0 <= 0:
+                return None
+            line_index = r0
+            edge_idx = Y1
+            target = y_lines[r1]
+        intervals = self._edge_intervals(cells, x_lines, y_lines, edge_idx, line_index)
+        adjustments = self._covering_adjustments(intervals, c0, c1, edge_idx, target)
+        if adjustments is None:
+            return None
+        return self._absorb_adjustments_cost(adjustments), adjustments
+
+    def _absorb_vertical_gap_plan(
+        self,
+        cells: list[_Cell],
+        x_lines: list[float],
+        y_lines: list[float],
+        r0: int,
+        c0: int,
+        r1: int,
+        c1: int,
+        side: Literal["left", "right"],
+    ) -> tuple[float, list[tuple[_Cell, _EdgeIndex, float]]] | None:
+        if side == "left":
+            if c0 <= 0:
+                return None
+            line_index = c0
+            edge_idx = X1
+            target = x_lines[c1]
+        else:
+            if c1 >= len(x_lines) - 1:
+                return None
+            line_index = c1
+            edge_idx = X0
+            target = x_lines[c0]
+        intervals = self._edge_intervals(cells, x_lines, y_lines, edge_idx, line_index)
+        adjustments = self._covering_adjustments(intervals, r0, r1, edge_idx, target)
+        if adjustments is None:
+            return None
+        return self._absorb_adjustments_cost(adjustments), adjustments
+
+    def _absorb_adjustments_cost(
+        self, adjustments: list[tuple[_Cell, _EdgeIndex, float]]
+    ) -> float:
+        cost = 0.0
+        for cell, edge_idx, target in adjustments:
+            old_value = cell.bbox[edge_idx]
+            generated_discount = 0.25 if cell.generated else 1.0
+            content_penalty = 2.0 if cell.content_bbox is not None else 1.0
+            cost += abs(target - old_value) * generated_discount * content_penalty
+        return cost
 
     def _alignment_plan(
         self,
@@ -1617,33 +1796,39 @@ class Builder:
         c0: int,
         r1: int,
         c1: int,
-        attr: Literal["x0", "x1", "y0", "y1"],
-    ) -> tuple[float, list[tuple[_Cell, str, float]]] | None:
-        if attr == "y0":
+        edge_idx: _EdgeIndex,
+    ) -> tuple[float, list[tuple[_Cell, _EdgeIndex, float]]] | None:
+        if edge_idx == Y0:
             target = y_lines[r0]
-            intervals = self._edge_intervals(cells, x_lines, y_lines, "y0", r1)
-            adjustments = self._covering_adjustments(intervals, c0, c1, attr, target)
+            intervals = self._edge_intervals(cells, x_lines, y_lines, Y0, r1)
+            adjustments = self._covering_adjustments(
+                intervals, c0, c1, edge_idx, target
+            )
             if adjustments is None:
                 return None
             return y_lines[r1] - y_lines[r0], adjustments
-        if attr == "y1":
+        if edge_idx == Y1:
             target = y_lines[r1]
-            intervals = self._edge_intervals(cells, x_lines, y_lines, "y1", r0)
-            adjustments = self._covering_adjustments(intervals, c0, c1, attr, target)
+            intervals = self._edge_intervals(cells, x_lines, y_lines, Y1, r0)
+            adjustments = self._covering_adjustments(
+                intervals, c0, c1, edge_idx, target
+            )
             if adjustments is None:
                 return None
             return y_lines[r1] - y_lines[r0], adjustments
-        if attr == "x0":
+        if edge_idx == X0:
             target = x_lines[c0]
-            intervals = self._edge_intervals(cells, x_lines, y_lines, "x0", c1)
-            adjustments = self._covering_adjustments(intervals, r0, r1, attr, target)
+            intervals = self._edge_intervals(cells, x_lines, y_lines, X0, c1)
+            adjustments = self._covering_adjustments(
+                intervals, r0, r1, edge_idx, target
+            )
             if adjustments is None:
                 return None
             return x_lines[c1] - x_lines[c0], adjustments
 
         target = x_lines[c1]
-        intervals = self._edge_intervals(cells, x_lines, y_lines, "x1", c0)
-        adjustments = self._covering_adjustments(intervals, r0, r1, attr, target)
+        intervals = self._edge_intervals(cells, x_lines, y_lines, X1, c0)
+        adjustments = self._covering_adjustments(intervals, r0, r1, edge_idx, target)
         if adjustments is None:
             return None
         return x_lines[c1] - x_lines[c0], adjustments
@@ -1653,22 +1838,22 @@ class Builder:
         cells: list[_Cell],
         x_lines: list[float],
         y_lines: list[float],
-        attr: Literal["x0", "x1", "y0", "y1"],
+        edge_idx: _EdgeIndex,
         line_index: int,
     ) -> list[tuple[int, int, _Cell]]:
         intervals: list[tuple[int, int, _Cell]] = []
         for cell in cells:
-            c0 = self._nearest_index(cell.bbox.x0, x_lines)
-            c1 = self._nearest_index(cell.bbox.x1, x_lines)
-            r0 = self._nearest_index(cell.bbox.y0, y_lines)
-            r1 = self._nearest_index(cell.bbox.y1, y_lines)
-            if attr == "y0" and r0 == line_index:
+            c0 = self._nearest_index(cell.bbox[X0], x_lines)
+            c1 = self._nearest_index(cell.bbox[X1], x_lines)
+            r0 = self._nearest_index(cell.bbox[Y0], y_lines)
+            r1 = self._nearest_index(cell.bbox[Y1], y_lines)
+            if edge_idx == Y0 and r0 == line_index:
                 intervals.append((c0, c1, cell))
-            elif attr == "y1" and r1 == line_index:
+            elif edge_idx == Y1 and r1 == line_index:
                 intervals.append((c0, c1, cell))
-            elif attr == "x0" and c0 == line_index:
+            elif edge_idx == X0 and c0 == line_index:
                 intervals.append((r0, r1, cell))
-            elif attr == "x1" and c1 == line_index:
+            elif edge_idx == X1 and c1 == line_index:
                 intervals.append((r0, r1, cell))
         return intervals
 
@@ -1677,17 +1862,17 @@ class Builder:
         intervals: list[tuple[int, int, _Cell]],
         start: int,
         end: int,
-        attr: str,
+        edge_idx: _EdgeIndex,
         target: float,
-    ) -> list[tuple[_Cell, str, float]] | None:
-        adjustments: list[tuple[_Cell, str, float]] = []
+    ) -> list[tuple[_Cell, _EdgeIndex, float]] | None:
+        adjustments: list[tuple[_Cell, _EdgeIndex, float]] = []
         cursor = start
         for i0, i1, cell in sorted(intervals, key=lambda item: item[0]):
             if i1 <= cursor:
                 continue
             if i0 > cursor:
                 break
-            adjustments.append((cell, attr, target))
+            adjustments.append((cell, edge_idx, target))
             cursor = max(cursor, i1)
             if cursor >= end:
                 return adjustments
@@ -1698,25 +1883,25 @@ class Builder:
         cells: list[_Cell],
         x_lines: list[float],
         y_lines: list[float],
-        attr: str,
+        edge_idx: _EdgeIndex,
         r0: int,
         c0: int,
         r1: int,
         c1: int,
     ) -> bool:
-        if attr == "y0":
+        if edge_idx == Y0:
             return not self._line_exists(
                 y_lines[r1], self._axis_lines(cells, axis="y")
             )
-        if attr == "y1":
+        if edge_idx == Y1:
             return not self._line_exists(
                 y_lines[r0], self._axis_lines(cells, axis="y")
             )
-        if attr == "x0":
+        if edge_idx == X0:
             return not self._line_exists(
                 x_lines[c1], self._axis_lines(cells, axis="x")
             )
-        if attr == "x1":
+        if edge_idx == X1:
             return not self._line_exists(
                 x_lines[c0], self._axis_lines(cells, axis="x")
             )
@@ -1758,38 +1943,40 @@ class Builder:
             or bbox.height <= median_row_height * 0.5
         )
 
-    def _axis_attrs(self, axis: Literal["x", "y"]) -> tuple[str, str]:
+    def _axis_indexes(self, axis: Literal["x", "y"]) -> tuple[_EdgeIndex, _EdgeIndex]:
         if axis == "x":
-            return "x0", "x1"
-        return "y0", "y1"
+            return X0, X1
+        return Y0, Y1
 
     def _axis_lines(
         self, cells: list[_Cell], *, axis: Literal["x", "y"]
     ) -> list[float]:
-        lo_attr, hi_attr = self._axis_attrs(axis)
+        lo_idx, hi_idx = self._axis_indexes(axis)
         clusters = self._cluster_edges(
-            [(getattr(cell.bbox, lo_attr), cell, lo_attr) for cell in cells]
-            + [(getattr(cell.bbox, hi_attr), cell, hi_attr) for cell in cells],
+            [(cell.bbox[lo_idx], cell, lo_idx) for cell in cells]
+            + [(cell.bbox[hi_idx], cell, hi_idx) for cell in cells],
             self._edge_tolerance(cells, axis),
         )
         return [value for value, _ in clusters]
 
-    def _adjust_edge(self, cell: _Cell, attr: str, target: float):
+    def _adjust_edge(self, cell: _Cell, edge_idx: _EdgeIndex, target: float):
         if cell.content_bbox is not None:
-            if attr in ("x0", "y0"):
-                target = min(target, getattr(cell.content_bbox, attr))
+            if edge_idx in (X0, Y0):
+                target = min(target, cell.content_bbox[edge_idx])
             else:
-                target = max(target, getattr(cell.content_bbox, attr))
-        bbox = cell.bbox.adjust(**{attr: target})
+                target = max(target, cell.content_bbox[edge_idx])
+        values = list(cell.bbox)
+        values[edge_idx] = target
+        bbox = BBox(*values)
         if bbox.width > 0 and bbox.height > 0:
             cell.bbox = bbox
 
     def _edge_tolerance(self, cells: list[_Cell], axis: Literal["x", "y"]) -> float:
-        lo_attr, hi_attr = self._axis_attrs(axis)
+        lo_idx, hi_idx = self._axis_indexes(axis)
         sizes = sorted(
-            getattr(cell.bbox, hi_attr) - getattr(cell.bbox, lo_attr)
+            cell.bbox[hi_idx] - cell.bbox[lo_idx]
             for cell in cells
-            if getattr(cell.bbox, hi_attr) > getattr(cell.bbox, lo_attr)
+            if cell.bbox[hi_idx] > cell.bbox[lo_idx]
         )
         if not sizes:
             return 2.0
@@ -1799,20 +1986,20 @@ class Builder:
 
     def _cluster_edges(
         self,
-        values: list[tuple[float, _Cell, str]],
+        values: list[tuple[float, _Cell, _EdgeIndex]],
         tolerance: float,
-    ) -> list[tuple[float, list[tuple[float, _Cell, str]]]]:
+    ) -> list[tuple[float, list[tuple[float, _Cell, _EdgeIndex]]]]:
         if not values:
             return []
         values = sorted(values, key=lambda item: item[0])
-        clusters: list[list[tuple[float, _Cell, str]]] = [[values[0]]]
+        clusters: list[list[tuple[float, _Cell, _EdgeIndex]]] = [[values[0]]]
         for item in values[1:]:
             if item[0] - clusters[-1][-1][0] <= tolerance:
                 clusters[-1].append(item)
             else:
                 clusters.append([item])
 
-        result: list[tuple[float, list[tuple[float, _Cell, str]]]] = []
+        result: list[tuple[float, list[tuple[float, _Cell, _EdgeIndex]]]] = []
         for cluster in clusters:
             cluster_values = [item[0] for item in cluster]
             value = sum(cluster_values) / len(cluster_values)
@@ -1821,3 +2008,286 @@ class Builder:
 
     def _nearest_index(self, value: float, lines: list[float]) -> int:
         return min(range(len(lines)), key=lambda i: abs(lines[i] - value))
+
+
+class _JoinMode(StrEnum):
+    NO=auto()
+    """不能够合并"""
+
+    PAGE=auto()
+    """跨页"""
+    COLUMN=auto()
+    """跨栏"""
+    PAGE_COLUMN=auto()
+    """跨页且跨栏"""
+class XParser:
+    """处理跨页/跨栏合并"""
+    _logger:Final=logging.getLogger(f'{__module__}.{__qualname__}')
+    _debugger:Final=XDebugger(f'{__module__}.{__qualname__}')
+    def __init__(self,manager:ModelManager):
+        super().__init__()
+    
+    def parse(self,doc:KDocument):
+
+        objects:list[KObject]=[]
+        for page in doc.working_pages:
+            objects.extend(page.objects)
+        
+        seqs:dict[int,int]={}
+        for i in range(1,len(objects)):
+            #TODO 2个解析还是一次性获得全部？
+            t1 = objects[i-1]
+            t2 = objects[i]
+            if isinstance(t1,KTable) and isinstance(t2,KTable):
+                mode=self._join(t1,t2)
+                if t1.is_layout() and t2.is_layout() and t1.col_num==t2.col_num and mode==_JoinMode.PAGE:
+                    #如果是整页使用表格布局，只需要支持跨页
+                    #如果是局部，如：图表等，需要支持跨栏/跨页/跨页跨栏
+                    self._align(t1,t2)
+                elif t1.is_wbk() and t2.is_wbk() and mode==_JoinMode.PAGE:
+                    #如果都是无边框，且可以合并，先快速对齐，如果没有，重新解析
+                    if not self._align(t1,t2):
+                        self._parse([t1,t2],seqs)
+                elif t1.is_ybk() and t2.is_wbk() and mode==_JoinMode.PAGE:
+                    #t1和t2有一个有边框，有一个使用无边框，如：彩色表格会出现这种
+                    #TODO 如果无法对齐，合并在一起解析？
+                    self._align(t1,t2)
+                elif t1.is_wbk() and t2.is_ybk() and mode==_JoinMode.PAGE:
+                    #TODO 如果无法对齐，合并在一起解析？
+                    self._align(t1,t2)
+                else:
+                    #跨栏/跨页跨栏等，暂时不处理
+                    pass
+        pass
+
+    
+    def _join(self,t1:KTable,t2:KTable)->_JoinMode:
+        """判断2个表格是否可以合并"""
+        if abs(t1.bbox.width - t2.bbox.width) >= 10:
+            #宽度差别过大
+            return _JoinMode.NO
+
+        if t1.page.number == t2.page.number:
+            # 同页分栏
+            #    |[t2]
+            # [t1]|
+            # 极端情况
+            # [t1]|[t2]
+            s1 = t1.page.get_section(t1)
+            s2 = t2.page.get_section(t2)
+            if s1 is not s2:
+                return _JoinMode.NO
+
+            c1 = s1.get_column(t1.bbox)
+            c2 = s2.get_column(t2.bbox)
+            if c1 is None or c2 is None:
+                return _JoinMode.NO
+
+            if c1.index + 1 != c2.index:
+                return _JoinMode.NO
+
+            if c2.bbox.y1 <= c1.bbox.y1 - 30:
+                return _JoinMode.NO
+
+            return _JoinMode.COLUMN
+
+        elif t1.page.number + 1 == t2.page.number:
+            # 所在的页面必须一致
+            if abs(t1.page.width - t2.page.width) >= 5:
+                return _JoinMode.NO
+
+            # local/宁波核查文档解析-问题排查文件/pdfs/2023-03-13_国网国际融资租赁有限公司2023年度第二期超短期融资券募集说明书.pdf 54-55
+            # 差距比较大
+
+            # 跨页不分栏
+            # 跨页分栏
+
+            s1 = t1.page.get_section(t1)
+            s2 = t2.page.get_section(t2)
+            if not s1.alike(s2):
+                return _JoinMode.NO
+
+            c1 = s1.get_column(t1.bbox)
+            c2 = s2.get_column(t2.bbox)
+            if c1 is None or c2 is None:
+                return _JoinMode.NO
+
+            # t1比较和页面底部，t2比较和页面顶部的距离？
+
+            # 跨页不分栏
+            if c1.index == c2.index and c1.index == 0:
+                # --t1--
+                # -------
+                # --t2--
+                return _JoinMode.PAGE
+
+            elif c1.index + 1 == s1.col_num and c2.index == 0:
+                # 跨页分栏
+                # ---|t1
+                # ---------跨页
+                # -t2|--
+                return _JoinMode.PAGE_COLUMN
+
+            else:
+                return _JoinMode.NO
+        else:
+            return _JoinMode.NO
+
+
+    def _align(self,t1:KTable,t2:KTable)->bool:
+        """快速的对齐，合适列数一致的表格"""
+
+        if not t1.bbox.align('x',t2.bbox,d=5):
+            #不允许跨栏，必须对齐
+            return False
+
+        #可能误差会大一些，特别是无边框表格
+        if abs(t1.bbox.width-t2.bbox.width)>=10:
+            return False
+        
+        if t1.col_num!=t2.col_num:
+            return False
+        
+        axis:list[float]=[]
+        axis.append(min(t1.bbox.x0,t2.bbox.x0))
+        for i in range(t1.col_num):
+            col1 = [c for c in t1.cells if c.col_index==i and c.col_span==1]
+            col2 = [c for c in t2.cells if c.col_index==i and c.col_span==1]
+            assert len(col1)>0
+            assert len(col2)>0
+            #判断这两列是否可以对齐
+            #如果有垂直线限制的，多数都对齐了，如果没有
+            b1=BBox.join2(col1)
+            b2=BBox.join2(col2)
+            if b1.over('x',b2,d=5,min_len=5):
+                #TODO 总是使用t1的为主
+                if t1.is_ybk():
+                    #如果t1为有边框，就是总是使用他
+                    x1=b1.x1
+                elif t2.is_ybk():
+                    x1=b2.x1
+                else:
+                    x0=min(b1.x0,b2.x0)
+                    x1=max(b1.x1,b2.x1)
+                if axis[-1]<x1:
+                    #TODO 严格的判断是否还符合content_bbox的限制
+                    axis.append(x1)
+                else:
+                    break
+            else:
+                break
+        
+        if len(axis)!=t1.col_num+1:
+            return False
+        
+        changed=False
+        for t in [t1,t2]:
+            if t.is_wbk():
+                #TODO 仅仅改变无边框的
+                changed=t.align(x_axis=axis) or changed
+        return changed
+        
+
+     
+    def _parse(self,tables:Sequence[KTable],seqs:dict[int,int]):
+        #目前仅仅仅仅支持跨页且不跨栏的
+
+        doc:Final= tables[0].page.doc
+        first_page:Final = tables[0].page
+        debugger=self._debugger.bind()
+        
+
+        #多个表格合并在一个，使用一个逻辑坐标，左下角为原点
+        #[--t1--]
+        #[--t2--]
+        table_bboxes:list[BBox]=[]
+        table_cells:list[list[_Cell]]=[]
+
+        y0=0
+        for table in reversed(tables):
+            m=Matrix().translate(0,-table.bbox.y0+y0)
+            tb=table.bbox.adjust(y0=y0,y1=y0+table.bbox.height)
+            #必须有cells=[_Cell(),_Cell()]
+            cells:list[_Cell]=table.cache['cells']
+            new_cells:list[_Cell]=[]
+            for cell in cells:
+                cell = cell.copy()
+                cell.bbox=cell.bbox.transform(m)
+                if cell.content_bbox:
+                    cell.content_bbox = cell.content_bbox.transform(m)
+                new_cells.append(cell)
+            
+            y0=tb.y1
+            table_bboxes.insert(0,tb)
+            table_cells.insert(0,new_cells)
+        
+        
+        page_width:Final = max(table.page.width for table in tables)
+        #合并后的表格的bbox
+        table_bbox:Final= BBox.join(table_bboxes)
+        imgs:list[PIL.Image.Image]=[]
+        for table,cells in zip(tables,table_cells):
+            bbox = table.page.bbox.adjust(y0=table.bbox.y0,y1=table.bbox.y1)
+            img = table.page.crop(bbox)
+            assert img is not None
+            imgs.append(img)
+        
+        
+        #之前的单元格
+        debug_imgs:list[PIL.Image.Image]=[]
+        cells = lists.flat(table_cells)
+        if debugger.allow('draw'):
+            debug_imgs.append(self._draw(page_width,table_bbox.height,imgs,cells))
+        #调整后的单元格
+        cells=_Builder().build(cells)
+        if debugger.allow('draw'):
+            debug_imgs.append(self._draw(page_width,table_bbox.height,imgs,cells))
+        
+        def rebuild_table(table:KTable,bbox:BBox,cells:Sequence[_Cell]):
+            #获得这个表格对应的cells
+            #[--t1--] =>table_bbox为在合并后的逻辑表格中的位置
+            #---------
+            #[--t2--]
+
+            #列坐标不需要变换，行坐标需要重新计算
+            #但是目前仅仅是为了列对齐，所以只需要列坐标
+            m=Matrix().translate(0,-bbox.y0+table.bbox.y0)
+            new_table_bbox = bbox.transform(m)
+            new_cells:list[_Cell]=[]
+            for cell in cells:
+                new_cell = _Cell(cell.bbox.transform(m))
+                new_cells.append(new_cell)
+            new_table=_Builder().make_table(table.page,new_table_bbox,new_cells)
+            #两个表格的列对比？或者直接使用新的new_table，然后替换之前的对象？
+            #new_table.page.draw(('page',None),('table',new_table.get_lines2()),line_width=4).show()
+            #对齐到这个表格？
+            new_table.subtype='ybk'
+            changed=self._align(new_table,table)
+            if changed:
+                self._logger.warning('第%s页，对齐表格成功',new_table.page.number)
+
+        #然后分成
+        for table,tb in zip(tables,table_bboxes):
+            rebuild_table(table,tb,tb.get(cells,ratio=0.8,remove=True))
+
+
+        if first_page.number not in seqs:
+            seqs[first_page.number]=0
+        else:
+            seqs[first_page.number]+=seqs[first_page.number]
+        idx=seqs[first_page.number]
+        if debug_imgs:
+            #合并多个图片为一个，可能在一个页面中，有多个跨栏合并
+            images.hmerge(*debug_imgs,gap=10,file=doc.debug_dir/'default/wbk/xparse'/f'{first_page.number}-{idx}.png')
+        
+    
+    def _draw(self,width:float,height:float,imgs:Sequence[PIL.Image.Image],cells:Sequence[_Cell]):
+        img=images.vmerge(*imgs,gap=1,bg_color=(255,255,0))
+        draw = PIL.ImageDraw.Draw(img)
+        m=Matrix().lb_to_lt((width,height),img.size)
+        for cell in cells:
+            draw.rectangle(cell.bbox.transform(m).to_tuple(),outline=(0,0,255))
+
+        return img
+        
+

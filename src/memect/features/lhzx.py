@@ -94,7 +94,7 @@ class Feature:
 
     def _candidates(self, page: KPage) -> list[KObject]:
         return [o for o in page.objects
-                if not (isinstance(o, KTable) and o.intent == TableIntent.LAYOUT)]
+                if not (isinstance(o, KTable) and o.is_layout())]
 
     def _infer_split(self, page: KPage, objects: Sequence[KObject]) -> float | None:
         # 找所有对象在 x 轴的投影间隙，取最大 gap 作为分栏线
@@ -147,8 +147,7 @@ class Feature:
             KCell(page, BBox(sx, bb.y0, x1, bb.y1),
                   row_index=0, col_index=1, objects=p.right_objects),
         ]
-        t = KTable(page, BBox(x0, bb.y0, x1, bb.y1), cells=cells, subtype="wbk")
-        t.intent = TableIntent.LAYOUT
+        t = KTable(page, BBox(x0, bb.y0, x1, bb.y1), cells=cells, subtype="layout")
         return t
 
     def _replace(self, page: KPage, old: Sequence[KObject], table: KTable):

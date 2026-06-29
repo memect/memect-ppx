@@ -397,8 +397,8 @@ class Feature:
                 )
             )
 
-        table = KTable(page, region.bbox, cells=cells, subtype="kv2")
-        table.intent = TableIntent.DATA
+        table = KTable(page, region.bbox, cells=cells, subtype="wbk")
+        #table.intent = TableIntent.DATA
         table.cache["kv2"] = region.jsonify()
         return table
 

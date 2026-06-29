@@ -267,7 +267,7 @@ function bindInputs() {
         //获得所有的表格，设置单元格的颜色，如果有的
             for(const table of document.querySelector('.doc').querySelectorAll('.body table')){
                 for(const td of table.querySelectorAll('td')){
-                    let color = td.dataset['color']
+                    let color = td.dataset['color']||'#ffffff'
                     if(!showBgColor){
                         color=''
                     }else{

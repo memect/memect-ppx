@@ -1093,8 +1093,7 @@ class BlockParser:
         cells.extend(source_row)
         if common_source_cell is not None:
             cells.append(common_source_cell)
-        table = KTable(page, table_bbox,cells=cells)
-        table.subtype='wbk'
+        table = KTable(page, table_bbox,cells=cells,subtype='layout')
         if debugger.allow("info"):
             with debugger.group("cells"):
                 for c in table.cells:

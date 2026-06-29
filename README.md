@@ -18,7 +18,7 @@ $uv pip install memect-ppx
 #--headless  如果在docker等环境中，可能需要这个
 $ppx install
 #下载依赖的模型，因为需要从huggingface中下载，默认已经设置好代理，如果需要取消或者设置其他
-#export HF_ENDPOINT=xxx
+#export HF_ENDPOINT=https://huggingface.co
 $ppx download
 ```
 

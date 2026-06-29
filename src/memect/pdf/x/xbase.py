@@ -821,7 +821,13 @@ class XTable(XObject):
     
     def is_layout(self)->bool:
         """表示表格的意图为布局"""
-        return self.tables[0].intent==TableIntent.LAYOUT
+        return self.tables[0].is_layout()
+    
+    def is_wbk(self)->bool:
+        return self.tables[0].is_wbk()
+    
+    def is_ybk(self)->bool:
+        return self.tables[0].is_ybk()
     
     @override
     def jsonify(self)->Any:

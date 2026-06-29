@@ -33,6 +33,7 @@ from .llm.paddle import Paddle, PaddleArgs
 from .model import ModelManager, ModelManagerArgs
 from .pdf2image import Pdf2Image, Pdf2ImageArgs
 from .watermark import Watermark
+from .style import TableStyleParser
 
 
 class ParserArgs(MyBaseModel):
@@ -74,6 +75,7 @@ class Parser:
         self._watermark = Watermark()
         #==============
         self._tree_parser = XTreeParser(args.tree)
+        self._table_style_parser = TableStyleParser()
 
     def parse(self, doc: KDocument, *, runner: Runner | None = None):
         #TODO 暂时如此设置
@@ -119,10 +121,13 @@ class Parser:
                 self._default.parse(doc)
             else:
                 raise ValueError(f"不支持的backend={backend}")
-            
 
             if doc.params.mode==ParseMode.TREE:
                 self._tree_parser.parse(doc)
+
+            #统一在这里设置style？
+            self._table_style_parser.parse(doc)
+
 
             # 解析完毕，按要求输出
             if doc.params.pptx:
