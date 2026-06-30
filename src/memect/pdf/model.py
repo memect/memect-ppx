@@ -136,11 +136,10 @@ class ModelExecutorArgs(MyBaseModel):
     scheduler: SchedulerArgs = Field(default_factory=SchedulerArgs)
     model: ModelArgs | str
     """如果为字符串，表示使用settings中的设置"""
-    #settings: Mapping[str, ModelArgs] = Field(default_factory=dict)
+    # settings: Mapping[str, ModelArgs] = Field(default_factory=dict)
     use_scheduler: bool = False
     """True表示使用scheduler"""
     port: int = 9527
-
 
 
 # [xx,cache,filename]
@@ -157,9 +156,9 @@ class ModelExecutor:
     def __init__(self, args: ModelExecutorArgs | Mapping[str, Any]):
         super().__init__()
         args = ModelExecutorArgs.create(args)
-        assert not isinstance(args.model,str)
+        assert not isinstance(args.model, str)
         # self._args:Final = args
-        self._name:Final = args.name
+        self._name: Final = args.name
         self._use_scheduler: Final = args.use_scheduler
         self._chunk_size: Final = args.chunk_size
         self._use_process: Final = args.use_process
@@ -183,22 +182,23 @@ class ModelExecutor:
             args.name, self._execute, **args.scheduler.model_dump()
         )
 
-        self._finalizer=weakref.finalize(self,self._close,self._executor,self._scheduler)
-    
+        self._finalizer = weakref.finalize(
+            self, self._close, self._executor, self._scheduler
+        )
+
     @classmethod
-    def _close(cls,executor:Executor|None,scheduler:Scheduler[Any,Any]|None):
+    def _close(cls, executor: Executor | None, scheduler: Scheduler[Any, Any] | None):
         if executor:
-            executor.shutdown(True,cancel_futures=True)
+            executor.shutdown(True, cancel_futures=True)
         if scheduler:
             scheduler.close()
-    
+
     def close(self):
         if self._finalizer.alive:
             self._finalizer()
         del self._executor
         del self._scheduler
         del self._model
-
 
     def parse(
         self,
@@ -237,14 +237,14 @@ class ModelExecutor:
                 timeout = end_clock - time.monotonic()
             else:
                 timeout = None
-            #TODO 如果不考虑timeout，现在使用execute更好
+            # TODO 如果不考虑timeout，现在使用execute更好
             if self._use_scheduler:
                 job = self.submit([item[0] for item in items])
                 results = lists.flat(job.wait(timeout=timeout))
             else:
                 results = self.execute([item[0] for item in items])
-            
-            for item, result in zip(items,results):
+
+            for item, result in zip(items, results):
                 item[1][cache_name] = result
                 if doc.is_dev():
                     doc.write(item[2], result)
@@ -297,16 +297,18 @@ class ModelExecutor:
         for i in range(0, len(files), chunk_size):
             items.append(files[i : i + chunk_size])
         return self._scheduler.submit(items)
-    
-    def execute(self,files:Sequence[_Image]):
+
+    def execute(self, files: Sequence[_Image]):
         if self._executor:
             if self._use_process:
-                fn=self._execute_on_process
+                fn = self._execute_on_process
             else:
-                fn=self._execute_on_thread
-            futures:list[Future[Any]]=[]
-            for i in range(0,len(files),self._chunk_size):
-                futures.append(self._executor.submit(fn,files[i:i+self._chunk_size]))
+                fn = self._execute_on_thread
+            futures: list[Future[Any]] = []
+            for i in range(0, len(files), self._chunk_size):
+                futures.append(
+                    self._executor.submit(fn, files[i : i + self._chunk_size])
+                )
             return lists.flat([f.result() for f in futures])
         elif self._model:
             # 轻量级且支持多线程的
@@ -332,7 +334,7 @@ class ModelExecutor:
 
     def _new_executor(self) -> Executor:
         if self._use_process:
-            mp_init = MPInit(name=f'{self._name}_executor')
+            mp_init = MPInit(name=f"{self._name}_executor")
             mp_init.set_fn(self._init_process, self._model_cfg)
             return ProcessPoolExecutor(
                 self._max_workers,
@@ -340,9 +342,14 @@ class ModelExecutor:
                 initializer=mp_init,
             )
         else:
-            return ThreadPoolExecutor(self._max_workers,thread_name_prefix=f'{self._model_cfg.name}', initializer=self._init_thread,initargs=(self._model_cfg,))
+            return ThreadPoolExecutor(
+                self._max_workers,
+                thread_name_prefix=f"{self._model_cfg.name}",
+                initializer=self._init_thread,
+                initargs=(self._model_cfg,),
+            )
 
-    def _init_thread(self,cfg:ModelArgs):
+    def _init_thread(self, cfg: ModelArgs):
         if hasattr(self._thread_local, "model"):
             # 出现这个错误，是线程池重复初始化同一个线程了
             raise RuntimeError("编程错误，该线程已经初始化了")
@@ -375,27 +382,28 @@ class ModelExecutor:
 
 
 class ModelMode(StrEnum):
-    SERVER=auto()
+    SERVER = auto()
     """表示在服务模式，模型通常在独立的进程"""
-    COMMAND=auto()
-    
+    COMMAND = auto()
+
+
 class ModelManagerArgs(MyBaseModel):
     executors: dict[str, ModelExecutorArgs] = Field(default_factory=dict)
-    models: dict[str,ModelArgs] = Field(default_factory=dict)
+    models: dict[str, ModelArgs] = Field(default_factory=dict)
 
 
 class ModelManager:
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, args: ModelManagerArgs | Mapping[str, Any]|None=None):
+    def __init__(self, args: ModelManagerArgs | Mapping[str, Any] | None = None):
         super().__init__()
         if args is None:
-            args = get_settings('model_manager')
+            args = get_settings("model_manager")
         args = ModelManagerArgs.create(args)
         self._executors: dict[str, ModelExecutor] = {}
-        self._models:dict[str,ModelArgs]={}
+        self._models: dict[str, ModelArgs] = {}
 
-        #alias_mapping: dict[str, str] = {}
+        # alias_mapping: dict[str, str] = {}
         models: dict[str, ModelArgs] = {}
         for name, value in args.models.items():
             models[name] = value
@@ -403,8 +411,12 @@ class ModelManager:
         for name, executor_args in args.executors.items():
             if executor_args.enable:
                 executor_args.name = name
-                if isinstance(executor_args.model,str):
-                    self._logger.info("create model executor name=%s,model=%s", name,executor_args.model)
+                if isinstance(executor_args.model, str):
+                    self._logger.info(
+                        "create model executor name=%s,model=%s",
+                        name,
+                        executor_args.model,
+                    )
                     executor_args.model = models[executor_args.model]
                 else:
                     self._logger.info("create model executor name=%s", name)
@@ -412,18 +424,18 @@ class ModelManager:
                 self._executors[name] = ModelExecutor(executor_args)
             else:
                 self._logger.info("disable model executor name=%s", name)
-        
-        self._finalizer = weakref.finalize(self,self._close,self._executors)
-    
+
+        self._finalizer = weakref.finalize(self, self._close, self._executors)
+
     @classmethod
-    def _close(cls,executors:dict[str,ModelExecutor]):
-        cls._logger.info('start close modelmanager')
+    def _close(cls, executors: dict[str, ModelExecutor]):
+        cls._logger.info("start close modelmanager")
         executors2 = dict(executors)
         executors.clear()
-        for name,executor in executors2.items():
-            cls._logger.info('close executor name=%s',name)
+        for name, executor in executors2.items():
+            cls._logger.info("close executor name=%s", name)
             executor.close()
-        cls._logger.info('end close modelmanager')
+        cls._logger.info("end close modelmanager")
 
     def close(self):
         if self._finalizer.alive:
@@ -431,293 +443,102 @@ class ModelManager:
 
     def get(self, name: str) -> ModelExecutor:
         return self._executors[name]
-    
 
 
-class RapidLayoutModel(Model):
-    _logger = logging.getLogger(f'{__module__}.{__qualname__}')
-    _use_lock=False
-    def __init__(self, mapping: Mapping[str, str] | None = None, **kwargs: Any):
+class LayoutModel(Model):
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    _use_lock = False
+
+    def __init__(self, **kwargs: Any):
         super().__init__()
-        self._mapping: Final = mapping or {}
-        self._model:Any=None
-        self._model_kwargs=kwargs
+        self._model: Any = None
+        self._model_kwargs = kwargs
 
     @override
     def _execute(self, files: Sequence[FileInfo]):
+        from memect.pdf.layout import get_mapping
+
         with self._lock:
             if self._model is None:
-                from rapid_layout import RapidLayout
+                from memect.pdf.layout import LayoutDetector
+                from memect.models import get_model_path
                 timer = Timer.start()
-                self._model = RapidLayout(**self._model_kwargs)
-                self._logger.info('load layout model,elapsed=%.3f',timer.elapsed())
+                params:dict[str,Any]={}
+                params.update(self._model_kwargs)
+                model_path = params.get('model_path')
+                version = params.get('version')
+                if not model_path:
+                    if version=='v2':
+                        model_path=get_model_path('pp_layoutv2.onnx')
+                    elif version=='v3':
+                        model_path=get_model_path('pp_layoutv3.onnx')
+                    elif version=='auto':
+                        model_path=get_model_path('pp_layoutv3.onnx')
+                    else:
+                        raise ValueError(f'不支持的version:{version}')
+                    params['model_path']=model_path
+                self._model = LayoutDetector(**params)
+                self._logger.info("load layout model,elapsed=%.3f", timer.elapsed())
 
         results: list[Any] = []
         for file in files:
             output = self._model(file.file)
-            objs: list[Any] = []
             size = file.size
-            height = size[1]
-            if output.boxes and output.scores and output.class_names:
-                for box, score, class_name in zip(
-                    output.boxes, output.scores, output.class_names
-                ):
-                    # box的坐标为原点为左上角
-                    x0, y0, x1, y1 = box
-                    # 如果需要转换为左下角，现在不需要了
-                    # y0, y1 = height - y1, height - y0
-                    obj = {
-                        "type": self._mapping.get(class_name) or class_name,
-                        "bbox": (x0, y0, x1, y1),
-                        "score": round(score, 2),
-                        "raw_type": class_name,
-                    }
-                    objs.append(obj)
-            else:
-                pass
-            results.append({"objects": objs, "width": size[0], "height": size[1]})
+            new_objs: list[Any] = []
+            mapping = get_mapping(output["version"])
+            for obj in output["objects"]:
+                new_obj = {}
+                new_obj["type"] = mapping.get(obj["type"]) or obj["type"]
+                new_obj["bbox"] = obj["rect"]
+                new_obj["score"] = obj["score"]
+                new_obj["raw_type"] = obj["type"]
+                new_objs.append(new_obj)
+
+            results.append({"objects": new_objs, "width": size[0], "height": size[1]})
         return results
 
-
-class RapidOCRModel(Model):
-    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
-    _use_lock=False
-    def __init__(self, **kwargs: Any):
-        super().__init__()
-        
-
-        self._model_kwargs = self._normalize_kwargs(kwargs)
-        self._model:Any = None
-        #self._unclip_ratio= self._model.text_det.postprocess_op.unclip_ratio
-
-    def _normalize_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        from rapidocr import (
-            EngineType,
-            LangCls,
-            LangDet,
-            LangRec,
-            ModelType,
-            OCRVersion,
-        )
-
-        def str2enum(name: str, type_: type[Any], full: bool = False):
-            for k, v in kwargs.items():
-                if (
-                    full and k == name or not full and k.split(".")[1] == name
-                ) and isinstance(v, str):
-                    kwargs[k] = type_(v)
-
-        kwargs = dict(kwargs)
-        str2enum("model_type", ModelType)
-        str2enum("engine_type", EngineType)
-        str2enum("ocr_version", OCRVersion)
-        str2enum("Det.lang_type", LangDet, full=True)
-        str2enum("Cls.lang_type", LangCls, full=True)
-        str2enum("Rec.lang_type", LangRec, full=True)
-
-        return kwargs
-
-    @override
-    def _execute(self, files: Sequence[FileInfo]):
-        with self._lock:
-            if self._model is None:
-                from rapidocr import RapidOCR
-                timer = Timer.start()
-                self._model = RapidOCR(params=self._model_kwargs)
-                self._logger.info('load ocr model,elapsed=%.3f',timer.elapsed())
-
-        from rapidocr.utils.output import RapidOCROutput
-
-        def to_point(p: Any) -> Any:
-            return (float(p[0]), float(p[1]))
-
-        def to_quad(box: Any) -> Any:
-            p1, p2, p3, p4 = box
-            return (to_point(p1), to_point(p2), to_point(p3), to_point(p4))
-        
-        def adjust_boxes(boxes: Any,texts:list[str], x_overlap_ratio: float = 0.7,min_overlap_y:float=1) -> Any:
-            if boxes is None or len(boxes) < 2:
-                return boxes
-            result = [b.copy() for b in boxes]
-            for i in range(len(result)):
-                for j in range(i + 1, len(result)):
-                    a, b = result[i], result[j]
-                    # 确定上下关系
-                    if a[:, 1].mean() > b[:, 1].mean():
-                        a, b = b, a
-                    # x 相交比例
-                    x_inter = min(a[:, 0].max(), b[:, 0].max()) - max(a[:, 0].min(), b[:, 0].min())
-                    min_w = min(a[:, 0].max() - a[:, 0].min(), b[:, 0].max() - b[:, 0].min())
-                    if min_w <= 0 or x_inter / min_w < x_overlap_ratio:
-                        continue
-                    # y 方向相交
-                    a_bottom, b_top = a[:, 1].max(), b[:, 1].min()
-                    if a_bottom-b_top<min_overlap_y:
-                        continue
-                    mid = (a_bottom + b_top) / 2
-                    if mid-1 <= a[:, 1].min() or mid+1 >= b[:, 1].max():
-                        continue
-                    a[np.argsort(a[:, 1])[-2:], 1] = mid-1
-                    b[np.argsort(b[:, 1])[:2], 1] = mid+1
-            return result
-
-        use_preferred_bbox=True
-        results: list[Any] = []
-        for file in files:
-            # 这个模型的其他参数，None表示不设置，使用配置的值
-            # 但是，如果设置了一次，就会直接改变配置的值，所以，要么都不设置，要么每次都设置
-
-            # 代码是支持PIL.Image.Image，但是接口的类型注释没有
-
-            #TODO 对于超长或者超宽的图片，需要分成多个图片进行识别   
-            cv2_img = file.cv2_image
-            output: RapidOCROutput = self._model(cv2_img)            
-            objs: list[Any] = []
-            size = file.size
-            # height = size[1]
-            if (
-                output.boxes is not None
-                and output.scores is not None
-                and output.txts is not None
-            ):
-                if use_preferred_bbox:
-                    boxes = adjust_boxes(output.boxes,output.txts)
-                else:
-                    boxes = output.boxes
-                for box, score, text in zip(boxes, output.scores, output.txts):
-                    #返回的box是unclip后的结果，扩大了一些
-                    #to_quad(box)
-                    #to_quad2(box) 稍微内收了一点
-                    if use_preferred_bbox:
-                        box = self._shrink_bbox_any_bg(cv2_img,box)                    
-                    #TODO 有些情况，会把2行文字识别为一个box，而且没有识别全部字
-                    #这种情况下，如下：被识别为一个box，而且仅仅返回“AB”，或者“ABC”，或者“ABCD”，导致字符的宽度/高度计算错误
-                    #AB
-                    #CD
-                    obj = {
-                        "text": text,
-                        # 原点为左上角
-                        "quad": to_quad(box),
-                        "score": round(score, 2),
-                    }
-                    objs.append(obj)
-            else:
-                pass
-            results.append({"spans": objs, "width": size[0], "height": size[1]})
-        return results
-
-
-    def _shrink_bbox_any_bg(
-        self,
-        image: np.ndarray,
-        bbox: np.ndarray,
-        padding: int = 1,
-    ) -> np.ndarray:
-        x, y, w, h = cv2.boundingRect(bbox.astype(np.float32))
-        roi = image[y:y+h, x:x+w]
-
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
-
-        # 用边缘像素中位数估计背景色，适配任意背景颜色
-        border = np.concatenate([gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]])
-        bg_value = int(np.median(border))
-        diff = cv2.absdiff(gray, np.full_like(gray, bg_value))
-
-        # 检测并遮盖表格线（细长的水平/垂直连通区域），避免其梯度干扰文字bbox
-        _, line_bin = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        line_mask = np.zeros_like(line_bin)
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(line_bin, connectivity=8)
-        for i in range(1, n):
-            cw, ch = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
-            if cw > 0 and ch > 0 and (cw / ch > 8 or ch / cw > 8):
-                line_mask[labels == i] = 255
-        gray_masked = gray.copy()
-        gray_masked[line_mask > 0] = bg_value
-        # 消除紧贴边缘的竖线/横线梯度
-        gray_masked[:, :2] = bg_value
-        gray_masked[:, -2:] = bg_value
-        gray_masked[:2, :] = bg_value
-        gray_masked[-2:, :] = bg_value
-
-        grad_x = cv2.Sobel(gray_masked, cv2.CV_32F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(gray_masked, cv2.CV_32F, 0, 1, ksize=3)
-        grad   = cv2.magnitude(grad_x, grad_y)
-        grad   = cv2.normalize(grad, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-        _, binary = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-
-        # 清除binary边缘残留（Sobel+morphology会让边缘梯度向内扩散）
-        edge = 3
-        binary[:edge, :] = 0
-        binary[-edge:, :] = 0
-        binary[:, :edge] = 0
-        binary[:, -edge:] = 0
-
-        coords = cv2.findNonZero(binary)
-
-        # DEBUG
-        if False:
-            import hashlib
-            import os
-            dbg_dir = "./local/shrink_debug"
-            os.makedirs(dbg_dir, exist_ok=True)
-            key = hashlib.md5(bbox.tobytes()).hexdigest()[:6]
-            cv2.imwrite(f"{dbg_dir}/{key}_roi.png", roi)
-            cv2.imwrite(f"{dbg_dir}/{key}_gray_masked.png", gray_masked)
-            cv2.imwrite(f"{dbg_dir}/{key}_binary.png", binary)
-
-        if coords is None:
-            return bbox
-
-        rx, ry, rw, rh = cv2.boundingRect(coords)
-        rx = max(rx - padding, 0)
-        ry = max(ry - padding, 0)
-        rw = min(rw + 2 * padding, w - rx)
-        rh = min(rh + 2 * padding, h - ry)
-
-        x1, y1 = x + rx,      y + ry
-        x2, y2 = x + rx + rw, y + ry + rh
-
-        return np.array([[x1,y1],[x2,y1],[x2,y2],[x1,y2]], dtype=np.float32)
 
 class OCRModel(Model):
-    _logger = logging.getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self,**kwargs:Any):
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
+
+    def __init__(self, **kwargs: Any):
         super().__init__()
         self._model_kwargs = kwargs
-        self._model:Any = None
+        self._model: Any = None
+
     def _execute(self, files: Sequence[FileInfo]):
         from .ocr import PPOCRv6OCR
         from memect.models import get_ocr_path
-        det_score_threshold = self._model_kwargs.get('det_score_threshold')
+
+        det_score_threshold = self._model_kwargs.get("det_score_threshold")
         with self._lock:
             if self._model is None:
                 timer = Timer.start()
-                #tiny,small,medium
-                model_size = self._model_kwargs.get('model','small')
-                params:dict[str,Any]={
-                    'det_model_path': self._model_kwargs.get('det_model_path') or get_ocr_path('det',model_size),
-                    'rec_model_path': self._model_kwargs.get('rec_model_path') or get_ocr_path('rec',model_size),
-                    "use_cuda": self._model_kwargs.get('use_cuda'),
-                    'use_cann':self._model_kwargs.get('use_cann'),
-                    'use_dml':self._model_kwargs.get('use_dml'),
-                    'engine':self._model_kwargs.get('engine')
+                # tiny,small,medium
+                model_size = self._model_kwargs.get("model", "small")
+                params: dict[str, Any] = {
+                    "det_model_path": self._model_kwargs.get("det_model_path")
+                    or get_ocr_path("det", model_size),
+                    "rec_model_path": self._model_kwargs.get("rec_model_path")
+                    or get_ocr_path("rec", model_size),
+                    "use_cuda": self._model_kwargs.get("use_cuda"),
+                    "use_cann": self._model_kwargs.get("use_cann"),
+                    "use_dml": self._model_kwargs.get("use_dml"),
+                    "engine": self._model_kwargs.get("engine"),
                 }
                 self._model = PPOCRv6OCR(**params)
-                self._logger.info('load ocr model,elapsed=%.3f',timer.elapsed())
+                self._logger.info("load ocr model,elapsed=%.3f", timer.elapsed())
 
-        
         def to_point(p: Any) -> Any:
             return (float(p[0]), float(p[1]))
 
         def to_quad(box: Any) -> Any:
             p1, p2, p3, p4 = box
             return (to_point(p1), to_point(p2), to_point(p3), to_point(p4))
-        
-        def adjust_boxes(boxes:list[Any], x_overlap_ratio: float = 0.7,min_overlap_y:float=1) -> Any:
+
+        def adjust_boxes(
+            boxes: list[Any], x_overlap_ratio: float = 0.7, min_overlap_y: float = 1
+        ) -> Any:
             if len(boxes) < 2:
                 return boxes
             result = [b.copy() for b in boxes]
@@ -728,24 +549,27 @@ class OCRModel(Model):
                     if a[:, 1].mean() > b[:, 1].mean():
                         a, b = b, a
                     # x 相交比例
-                    x_inter = min(a[:, 0].max(), b[:, 0].max()) - max(a[:, 0].min(), b[:, 0].min())
-                    min_w = min(a[:, 0].max() - a[:, 0].min(), b[:, 0].max() - b[:, 0].min())
+                    x_inter = min(a[:, 0].max(), b[:, 0].max()) - max(
+                        a[:, 0].min(), b[:, 0].min()
+                    )
+                    min_w = min(
+                        a[:, 0].max() - a[:, 0].min(), b[:, 0].max() - b[:, 0].min()
+                    )
                     if min_w <= 0 or x_inter / min_w < x_overlap_ratio:
                         continue
                     # y 方向相交
                     a_bottom, b_top = a[:, 1].max(), b[:, 1].min()
-                    if a_bottom-b_top<min_overlap_y:
+                    if a_bottom - b_top < min_overlap_y:
                         continue
                     mid = (a_bottom + b_top) / 2
-                    if mid-1 <= a[:, 1].min() or mid+1 >= b[:, 1].max():
+                    if mid - 1 <= a[:, 1].min() or mid + 1 >= b[:, 1].max():
                         continue
-                    a[np.argsort(a[:, 1])[-2:], 1] = mid-1
-                    b[np.argsort(b[:, 1])[:2], 1] = mid+1
+                    a[np.argsort(a[:, 1])[-2:], 1] = mid - 1
+                    b[np.argsort(b[:, 1])[:2], 1] = mid + 1
             return result
 
-
-        model:PPOCRv6OCR=self._model
-        use_preferred_bbox=True
+        model: PPOCRv6OCR = self._model
+        use_preferred_bbox = True
         results: list[Any] = []
         for file in files:
             # 这个模型的其他参数，None表示不设置，使用配置的值
@@ -753,32 +577,32 @@ class OCRModel(Model):
 
             # 代码是支持PIL.Image.Image，但是接口的类型注释没有
 
-            #TODO 对于超长或者超宽的图片，需要分成多个图片进行识别   
+            # TODO 对于超长或者超宽的图片，需要分成多个图片进行识别
             cv2_img = file.cv2_image
-            output = model.predict(cv2_img,det_score_threshold=det_score_threshold)            
+            output = model.predict(cv2_img, det_score_threshold=det_score_threshold)
             objs: list[Any] = []
             size = file.size
             # height = size[1]
             if output:
-                boxes:list[Any]=[np.array(item['box']) for item in output]
-                txts:list[Any]=[item['text'] for item in output]
-                scores:list[Any]=[item['rec_score'] for item in output]
+                boxes: list[Any] = [np.array(item["box"]) for item in output]
+                txts: list[Any] = [item["text"] for item in output]
+                scores: list[Any] = [item["rec_score"] for item in output]
                 if use_preferred_bbox:
                     boxes = adjust_boxes(boxes)
                 else:
                     pass
-                for box,score,text in zip(boxes,scores,txts):
-                    #返回的box是unclip后的结果，扩大了一些
-                    #to_quad(box)
-                    #to_quad2(box) 稍微内收了一点
+                for box, score, text in zip(boxes, scores, txts):
+                    # 返回的box是unclip后的结果，扩大了一些
+                    # to_quad(box)
+                    # to_quad2(box) 稍微内收了一点
                     if use_preferred_bbox:
-                        box = self._shrink_bbox_any_bg(cv2_img,box)                    
-                    #TODO 有些情况，会把2行文字识别为一个box，而且没有识别全部字
-                    #这种情况下，如下：被识别为一个box，而且仅仅返回“AB”，或者“ABC”，或者“ABCD”，导致字符的宽度/高度计算错误
-                    #AB
-                    #CD
+                        box = self._shrink_bbox_any_bg(cv2_img, box)
+                    # TODO 有些情况，会把2行文字识别为一个box，而且没有识别全部字
+                    # 这种情况下，如下：被识别为一个box，而且仅仅返回“AB”，或者“ABC”，或者“ABCD”，导致字符的宽度/高度计算错误
+                    # AB
+                    # CD
 
-                    if text and score>0:
+                    if text and score > 0:
                         obj = {
                             "text": text,
                             # 原点为左上角
@@ -793,17 +617,16 @@ class OCRModel(Model):
             results.append({"spans": objs, "width": size[0], "height": size[1]})
         return results
 
-
     def _shrink_bbox_any_bg(
         self,
         image: np.ndarray,
         bbox: np.ndarray,
         padding: int = 1,
     ) -> np.ndarray:
-        
-        #bbox的区域可能大了一点，包含了单元格的边界线，导致认为也是笔画，无法计算更精确的字符区域，导致该字符的区域过大
+
+        # bbox的区域可能大了一点，包含了单元格的边界线，导致认为也是笔画，无法计算更精确的字符区域，导致该字符的区域过大
         x, y, w, h = cv2.boundingRect(bbox.astype(np.float32))
-        roi = image[y:y+h, x:x+w]
+        roi = image[y : y + h, x : x + w]
 
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
 
@@ -830,8 +653,8 @@ class OCRModel(Model):
 
         grad_x = cv2.Sobel(gray_masked, cv2.CV_32F, 1, 0, ksize=3)
         grad_y = cv2.Sobel(gray_masked, cv2.CV_32F, 0, 1, ksize=3)
-        grad   = cv2.magnitude(grad_x, grad_y)
-        grad   = cv2.normalize(grad, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        grad = cv2.magnitude(grad_x, grad_y)
+        grad = cv2.normalize(grad, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
         _, binary = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
@@ -851,6 +674,7 @@ class OCRModel(Model):
         if False:
             import hashlib
             import os
+
             dbg_dir = "./local/shrink_debug"
             os.makedirs(dbg_dir, exist_ok=True)
             key = hashlib.md5(bbox.tobytes()).hexdigest()[:6]
@@ -867,48 +691,49 @@ class OCRModel(Model):
         rw = min(rw + 2 * padding, w - rx)
         rh = min(rh + 2 * padding, h - ry)
 
-        x1, y1 = x + rx,      y + ry
+        x1, y1 = x + rx, y + ry
         x2, y2 = x + rx + rw, y + ry + rh
-        return np.array([[x1,y1],[x2,y1],[x2,y2],[x1,y2]], dtype=np.float32)
-
+        return np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
 
 
 class FormulaPPModel(Model):
-    _logger=logging.getLogger(f'{__module__}.{__qualname__}')
-    _use_lock=False
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    _use_lock = False
+
     def __init__(self, **kwargs: Any):
         super().__init__()
-        self._model=None
-        self._model_kwargs=kwargs
+        self._model = None
+        self._model_kwargs = kwargs
 
     @override
     def _execute(self, files: Sequence[FileInfo]):
         if self._model is None:
             with self._lock:
                 from memect.pdf.formula_pp import Parser
+
                 if self._model is None:
                     timer = utils.Timer.start()
                     self._model = Parser(**self._model_kwargs)
-                    self._logger.info('load fromula model,elapsed=%.3f',timer.elapsed())
+                    self._logger.info(
+                        "load fromula model,elapsed=%.3f", timer.elapsed()
+                    )
 
-        results:list[Any]=[]
+        results: list[Any] = []
         for file in files:
-            t1=time.monotonic()
+            t1 = time.monotonic()
             res = self._model.parse(file.cv2_image)
-            results.append({
-                'latex':res,
-                'elapsed':time.monotonic()-t1
-            })
+            results.append({"latex": res, "elapsed": time.monotonic() - t1})
         return results
 
 
 class FormulaMfrModel(Model):
-    _logger=logging.getLogger(f'{__module__}.{__qualname__}')
-    _use_lock=False
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    _use_lock = False
+
     def __init__(self, **kwargs: Any):
         super().__init__()
-        #from memect.pdf.mfr import Parser
-        self._model= None #Parser(**kwargs)
+        # from memect.pdf.mfr import Parser
+        self._model = None  # Parser(**kwargs)
         self._model_kwargs = kwargs
 
     @override
@@ -917,56 +742,49 @@ class FormulaMfrModel(Model):
             with self._lock:
                 if self._model is None:
                     from memect.pdf.formula_mfr import Parser
+
                     timer = utils.Timer.start()
                     self._model = Parser(**self._model_kwargs)
-                    self._logger.info('load formula elapsed=%.3f',timer.elapsed())
+                    self._logger.info("load formula elapsed=%.3f", timer.elapsed())
 
-        results:list[Any]=[]
+        results: list[Any] = []
         for file in files:
             t1 = time.monotonic()
             res = self._model.parse(file.cv2_image)
-            results.append({
-                'latex':res,
-                'elapsed':time.monotonic()-t1
-            })
+            results.append({"latex": res, "elapsed": time.monotonic() - t1})
         return results
-    
 
 
 class TableModel(Model):
-    _logger=logging.getLogger(f'{__module__}.{__qualname__}')
-    _use_lock=False
-    def __init__(self,*,model_path: str|Path|None=None,**kwargs:Any):
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    _use_lock = False
+
+    def __init__(self, *, model_path: str | Path | None = None, **kwargs: Any):
         super().__init__()
-        from memect.models import get_model_path
-
-        
-        if not model_path:
-            model_path=get_model_path('table_det.onnx')
-        else:
-            model_path = Path(model_path)
-
         self._model_path = model_path
         self._model_kwargs = kwargs
-        self._model:Any=None
-        #self._model = RTDETRTableCellDet(model_path,**kwargs)
-    
+        self._model: Any = None
 
     @override
     def _execute(self, files: Sequence[FileInfo]):
         with self._lock:
             if self._model is None:
                 from .table_det import RTDETRTableCellDet
+                from memect.models import get_model_path
+                if not self._model_path:
+                    model_path = get_model_path("table_det.onnx")
+                else:
+                    model_path = Path(self._model_path)
                 timer = utils.Timer.start()
-                self._model = RTDETRTableCellDet(self._model_path,**self._model_kwargs)
-                self._logger.info('load table model,elapsed=%.3f',timer.elapsed())
+                self._model = RTDETRTableCellDet(model_path, **self._model_kwargs)
+                self._logger.info("load table model,elapsed=%.3f", timer.elapsed())
 
         results: list[Any] = []
         for file in files:
-            result = self._model(file.cv2_image,show_gui=False)
+            result = self._model(file.cv2_image, show_gui=False)
             results.append(result)
         return results
-    
+
 
 class LLMModel(Model):
     # 通过api调用，不需要lock，一个模型就足够了
@@ -1001,7 +819,7 @@ class LLMModel(Model):
 
     @override
     def _execute(self, files: Sequence[FileInfo]):
-        #TODO 因为这里没有并行执行，所以，ModelExecutor的max_workers可以设置为n个
+        # TODO 因为这里没有并行执行，所以，ModelExecutor的max_workers可以设置为n个
         results: list[Any] = []
         for file in files:
             messages = self._build_messages(file)
@@ -1060,10 +878,6 @@ class LLMTableModel(LLMModel):
             return KTable.parse_otsl(text)
 
 
-class MinerUModel(Model):
-    """使用mineru的模型，支持layout/ocr等"""
-    pass
-
 class MockModel(Model):
     def __init__(self):
         super().__init__()
@@ -1076,6 +890,3 @@ class MockModel(Model):
             print(f"execute file={file.file}")
             results.append({})
         return results
-
-
-

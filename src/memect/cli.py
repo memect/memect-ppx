@@ -256,7 +256,10 @@ class OCRModel(StrEnum):
 def start(
     host: Annotated[str | None, typer.Option(help="监听地址")] = None,
     port: Annotated[int | None, typer.Option(help="监听端口")] = None,
-    cpu: Annotated[bool, typer.Option(help="强制使用cpu，即使当前有gpu")] = False,
+    cpu: Annotated[
+        Literal["all", "ocr", "layout","table","formula"] | None,
+        typer.Option(help="强制使用cpu，即使当前有gpu"),
+    ] = None,
     cuda: Annotated[
         str | None,
         typer.Option(help="指定使用哪些gpu，等同于CUDA_VISIBLE_DEVICES的设置"),

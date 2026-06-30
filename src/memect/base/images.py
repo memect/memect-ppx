@@ -2,10 +2,9 @@
 import base64
 import io
 import shutil
+import typing
 from pathlib import Path
 from typing import Sequence
-import typing
-
 
 import PIL
 import PIL.Image
@@ -222,8 +221,8 @@ def cv2_to_pil(image:'cv2.typing.MatLike',mode:str='rgb')->PIL.Image.Image:
 
 def pil_to_cv2(image:PIL.Image.Image)->'cv2.typing.MatLike':
     """PIL图片转换为cv2格式(BGR)"""
-    import numpy as np
     import cv2
+    import numpy as np
     if image.mode == 'RGBA':
         return cv2.cvtColor(np.array(image), cv2.COLOR_RGBA2BGRA)
     elif image.mode == 'RGB':

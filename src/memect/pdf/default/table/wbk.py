@@ -225,16 +225,15 @@ class Parser:
                     return True
                 #如果ybk列span多的，就信任无边框？
                 wbk_ok=0
-                ybk_ok=0
                 for i in range(row_num):
                     row1 = ybk.get_row(i)
                     row2 = wbk.get_row(i)
-                    if len(row1)>=len(row2):
-                        ybk_ok+=1
-                    else:
+                    if len(row1)<len(row2):
                         wbk_ok+=1
-                
-                if wbk_ok-ybk_ok>=2:
+                    else:
+                        pass
+                min_threshold=min(2,row_num-1)
+                if wbk_ok>=min_threshold:
                     return False
                 
             
@@ -323,6 +322,7 @@ class Parser:
         
         cells = self._convert_cells(page,bbox,model_result)
         raw_cells: Final = [c.bbox for c in cells]
+        raw_bbox:Final = bbox
         # 避免重叠
         cells = self._adjust_cells(cells)
         adjusted_cells:Final=[c.bbox for c in cells]
@@ -364,6 +364,7 @@ class Parser:
             steps.extend(
                 [
                     ("page", None),
+                    ("raw_table_bbox",[raw_bbox]),
                     ("table", [bbox]),
                     (f"pdf_chars={len(result.pdf_chars)}", result.chars),
                     (f"ocr_chars={len(result.ocr_chars)}", result.ocr_chars),

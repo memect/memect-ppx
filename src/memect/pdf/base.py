@@ -1255,11 +1255,11 @@ class KPage:
 
                 overlap_ratio = inter.area / vobj2.bbox.area
                 if overlap_ratio >= min_overlap_ratio:
-                    if vobj.is_table() and vobj2.is_any_text() and overlap_ratio<0.5 and vobj2.bbox.cy-vobj.bbox.y1>-2:
+                    if (vobj.is_table() or vobj.is_chart()) and vobj2.is_any_text() and overlap_ratio<0.5 and vobj2.bbox.cy-vobj.bbox.y1>-2:
                         #[---title--]
                         #[---table--]  =>如果稍微重叠一点，可以调整table的
                         self._logger.warning('第%s页，调整和表格重叠的文本,text=%s,table=%s',self.number,vobj2.bbox,vobj.bbox)
-                        vobj.set_bbox(vobj.bbox.adjust(y1=vobj2.bbox.y0))
+                        vobj.set_bbox(vobj.bbox.adjust(y1=vobj2.bbox.y0-1))
                     else:
                         # 超过一半区域重叠，如果类型相同？合并，如：都是文本类型
                         self._logger.warning(
