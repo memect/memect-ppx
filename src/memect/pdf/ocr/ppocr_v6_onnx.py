@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import PIL.Image
@@ -381,6 +381,9 @@ class PPOCRv6Det:
         self,
         model_path: str | Path,
         config_path: str | Path | None = None,
+        override_config:Mapping[str,Any]|None=None,
+        limit_type:str='min',
+        limit_side_len:int=32,
         engine: str | None = None,
         use_cuda: bool = False,
         use_cann: bool = False,
@@ -393,6 +396,22 @@ class PPOCRv6Det:
             raise FileNotFoundError(
                 f"det config not found for model {model_path}; pass det inference.yml explicitly"
             )
+        if override_config:
+            from memect.base.config import set_values
+            set_values(self.config,override_config)
+        
+        if True:
+            for op in self.config['PreProcess']['transform_ops']:
+                if 'DetResizeForTest' in op:
+                    value = op['DetResizeForTest']
+                    if value:
+                        value=dict(value)
+                    else:
+                        value={}
+                    value['limit_type']=limit_type
+                    value['limit_side_len']=limit_side_len
+                    op['DetResizeForTest']=value
+
         self.session = _InferenceSession(
             model_path,
             engine=engine,
@@ -442,6 +461,7 @@ class PPOCRv6Rec:
         self,
         model_path: str | Path,
         config_path: str | Path | None = None,
+        override_config:Mapping[str,Any]|None=None,
         engine: str | None = None,
         use_cuda: bool = False,
         use_cann: bool = False,
@@ -454,6 +474,10 @@ class PPOCRv6Rec:
             raise FileNotFoundError(
                 f"rec config not found for model {model_path}; pass rec inference.yml explicitly"
             )
+        if override_config:
+            from memect.base.config import set_values
+            set_values(self.config,override_config)
+
         self.config_dir = resolved_config.parent if resolved_config is not None else Path(model_path).parent
         self.session = _InferenceSession(
             model_path,
@@ -518,6 +542,11 @@ class PPOCRv6OCR:
         rec_model_path: str | Path,
         det_config_path: str | Path | None = None,
         rec_config_path: str | Path | None = None,
+        det_override_config:Mapping[str,Any]|None=None,
+        rec_override_config:Mapping[str,Any]|None=None,
+        det_limit_type:str='min',
+        det_limit_side_len:int=32,
+
         engine: str | None = None,
         use_cuda: bool = False,
         use_cann: bool = False,
@@ -527,6 +556,9 @@ class PPOCRv6OCR:
         self.det = PPOCRv6Det(
             det_model_path,
             det_config_path,
+            override_config=det_override_config,
+            limit_type=det_limit_type,
+            limit_side_len=det_limit_side_len,
             engine=engine,
             use_cuda=use_cuda,
             use_cann=use_cann,
@@ -536,6 +568,7 @@ class PPOCRv6OCR:
         self.rec = PPOCRv6Rec(
             rec_model_path,
             rec_config_path,
+            override_config=rec_override_config,
             engine=engine,
             use_cuda=use_cuda,
             use_cann=use_cann,
