@@ -1048,7 +1048,7 @@ class Parser:
             if dest["kind"] == 1:
                 # 指向当前文档的某个页面的某个位置
                 # 页码，0表示第一页
-                dest["page"]
+                #dest["page"]
                 # 为没有应用page.rotation前的坐标，如果页面应用了，这个也需要跟着变化
                 # pdf原始的值使用左下角坐标，但是pymupdf转换为左上角坐标，这里再转回来
                 page = kdoc.pages[node.page_number - 1]
@@ -1057,8 +1057,8 @@ class Parser:
                 to = dest["to"]
                 node.point = Point(to.x, to.y).transform(m)
             elif dest["kind"] == 4:
-                # 指向一个命名位置
-                dest["nameddest"]
+                # 指向一个命名位置，有些没有
+                #dest["nameddest"]
                 node.type = "other"
             else:
                 # 其他的都是打开文件/跳转到其他pdf/或者打开uri
