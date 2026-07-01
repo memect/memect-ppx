@@ -421,9 +421,14 @@ class DefaultParser:
                     weights.append(1)
                 else:
                     weights.append(2)
+            
+
+            quads = quad.split("y" if is_vertical else "x", weights=list(reversed(weights)) if is_vertical else weights)
+            if is_vertical:
+                quads.reverse()
 
             for c, q in zip(
-                text, quad.split("y" if is_vertical else "x", weights=weights)
+                text, quads
             ):
                 char = KChar(
                     page,
