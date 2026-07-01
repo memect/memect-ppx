@@ -376,6 +376,13 @@ def _find_first_file(directory: Path, *patterns: str) -> Path | None:
     return None
 
 
+def _positive_int(value: Any, name: str) -> int:
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return value
+
+
 class PPOCRv6Det:
     def __init__(
         self,
@@ -546,6 +553,7 @@ class PPOCRv6OCR:
         rec_override_config:Mapping[str,Any]|None=None,
         det_limit_type:str='min',
         det_limit_side_len:int=32,
+        rec_batch_size: int = 100,
 
         engine: str | None = None,
         use_cuda: bool = False,
@@ -575,6 +583,7 @@ class PPOCRv6OCR:
             use_dml=use_dml,
             providers=providers,
         )
+        self.rec_batch_size = _positive_int(rec_batch_size, "rec_batch_size")
 
     def predict(
         self,
@@ -591,8 +600,20 @@ class PPOCRv6OCR:
                 for box in det_boxes
                 if float(box["det_score"]) >= det_score_threshold
             ]
-        crops = [get_rotate_crop_image(img, box["box"]) for box in det_boxes]
-        rec_results = self.rec.predict_batch(crops) if crops else []
+        rec_results: list[tuple[str, float]] = []
+        crops: list[np.ndarray] = []
+        debug_crops: list[np.ndarray] | None = [] if debug else None
+        for box in det_boxes:
+            crop = get_rotate_crop_image(img, box["box"])
+            if debug_crops is not None:
+                debug_crops.append(crop)
+            crops.append(crop)
+            if len(crops) >= self.rec_batch_size:
+                rec_results.extend(self.rec.predict_batch(crops))
+                crops.clear()
+        if crops:
+            rec_results.extend(self.rec.predict_batch(crops))
+            crops.clear()
 
         result: list[dict[str, Any]] = []
         for box_item, (text, score) in zip(det_boxes, rec_results, strict=False):
@@ -605,7 +626,7 @@ class PPOCRv6OCR:
                 }
             )
         if debug:
-            _show_crop_debug_view(crops, rec_results)
+            _show_crop_debug_view(debug_crops or [], rec_results)
             _show_debug_view(img, result)
         return result
 

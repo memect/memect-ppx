@@ -462,21 +462,22 @@ class LayoutModel(Model):
             if self._model is None:
                 from memect.pdf.layout import LayoutDetector
                 from memect.models import get_model_path
+
                 timer = Timer.start()
-                params:dict[str,Any]={}
+                params: dict[str, Any] = {}
                 params.update(self._model_kwargs)
-                model_path = params.get('model_path')
-                version = params.get('version')
+                model_path = params.get("model_path")
+                version = params.get("version")
                 if not model_path:
-                    if version=='v2':
-                        model_path=get_model_path('pp_layoutv2.onnx')
-                    elif version=='v3':
-                        model_path=get_model_path('pp_layoutv3.onnx')
-                    elif version=='auto':
-                        model_path=get_model_path('pp_layoutv3.onnx')
+                    if version == "v2":
+                        model_path = get_model_path("pp_layoutv2.onnx")
+                    elif version == "v3":
+                        model_path = get_model_path("pp_layoutv3.onnx")
+                    elif version == "auto":
+                        model_path = get_model_path("pp_layoutv3.onnx")
                     else:
-                        raise ValueError(f'不支持的version:{version}')
-                    params['model_path']=model_path
+                        raise ValueError(f"不支持的version:{version}")
+                    params["model_path"] = model_path
                 self._model = LayoutDetector(**params)
                 self._logger.info("load layout model,elapsed=%.3f", timer.elapsed())
 
@@ -525,7 +526,14 @@ class OCRModel(Model):
                     "use_cann": self._model_kwargs.get("use_cann"),
                     "use_dml": self._model_kwargs.get("use_dml"),
                     "engine": self._model_kwargs.get("engine"),
+                    "rec_batch_size": self._model_kwargs.get("rec_batch_size", 100),
                 }
+                if "det_limit_type" in self._model_kwargs:
+                    params["det_limit_type"] = self._model_kwargs.get("det_limit_type")
+                if "det_limit_side_len" in self._model_kwargs:
+                    params["det_limit_side_len"] = self._model_kwargs.get(
+                        "det_limit_side_len"
+                    )
                 self._model = PPOCRv6OCR(**params)
                 self._logger.info("load ocr model,elapsed=%.3f", timer.elapsed())
 
@@ -771,6 +779,7 @@ class TableModel(Model):
             if self._model is None:
                 from .table_det import RTDETRTableCellDet
                 from memect.models import get_model_path
+
                 if not self._model_path:
                     model_path = get_model_path("table_det.onnx")
                 else:

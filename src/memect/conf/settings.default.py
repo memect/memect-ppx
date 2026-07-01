@@ -308,6 +308,7 @@ settings: dict[str, Any] = {
                     # tiny,small,medium
                     "model": "small",
                     "det_score_threshold": 0.4,
+                    "rec_batch_size": 100,
                     # "det_model_path":None,
                     # "rec_model_path":None,
                     "engine": _ocr_device.get("engine", "openvino"),
