@@ -861,6 +861,30 @@ class _Builder:
         def is_blank(c: KCell) -> bool:
             return len(c.objects) == 0
 
+        def is_continue(noes:Sequence[int])->bool:
+            for k in range(1,len(noes)):
+                if noes[k-1]+1!=noes[k]:
+                    return False
+            return True
+        def has_no_and_blank(t:KTable,col_index:int)->bool:
+            blank_count=0
+            noes:list[int]=[]
+            for j in range(t.row_num):
+                s=t[j,col_index].text
+                if not s:
+                    blank_count+=1
+                else:
+                    try:
+                        k=int(s)
+                        noes.append(k)
+                    except ValueError:
+                        return False
+            if blank_count>0 and len(noes)>0 and is_continue(noes):
+                #严格的必须为连续的
+                return True
+            else:
+                return False
+
         if not use_batch():
             return None
 
@@ -902,9 +926,28 @@ class _Builder:
                     C(c2).reason = "c1和c2都是序号"
             elif is_no(C(c1).text2) and is_blank(c2):
                 # 如果为空格，就是需要合并
-                for c1, c2 in align_cells:
-                    C(c2).merged = True
-                    C(c2).reason = "c1为序号，c2为空"
+                #TODO 这个有例外的，如：
+                #[1][xx]
+                #---------------
+                #[ ][xx] =>不合并，从逻辑上，合并也没有错误，但是因为为有边框表格，且后面有不合并的案例，不合并更符合原意图
+                #[2][xx]
+                #[ ][xx]
+                #[3][xx]
+                #[4][xx]
+
+                if has_no_and_blank(c2.table,c2.col_index):
+                    if True:
+                        ok=False
+                        break
+                    else:
+                        for c1, c2 in align_cells:
+                            #TODO 不能够简单的判断为合并，还需要通过其他列判断
+                            C(c2).merged = False
+                            C(c2).reason = "c1为序号，c2为空，但是该列存在其他空白"
+                else:
+                    for c1, c2 in align_cells:
+                        C(c2).merged = True
+                        C(c2).reason = "c1为序号，c2为空"
             elif (
                 not is_blank(c1)
                 and not is_blank(c2)
@@ -1155,6 +1198,30 @@ class _Builder:
                         C(c2).reason = "t1为表头，c1和c2对齐"
             return True
 
+        def is_continue(noes:Sequence[int])->bool:
+            for k in range(1,len(noes)):
+                if noes[k-1]+1!=noes[k]:
+                    return False
+            return True
+        def has_no_and_blank(t:KTable,col_index:int)->bool:
+            blank_count=0
+            noes:list[int]=[]
+            for j in range(t.row_num):
+                s=t[j,col_index].text
+                if not s:
+                    blank_count+=1
+                else:
+                    try:
+                        k=int(s)
+                        noes.append(k)
+                    except ValueError:
+                        return False
+            if blank_count>0 and len(noes)>0 and is_continue(noes):
+                #严格的必须为连续的
+                return True
+            else:
+                return False
+
         def case0(i: int):
             """单行"""
             # 案例1:
@@ -1215,8 +1282,23 @@ class _Builder:
                 elif is_no(s1) and is_blank(c2):
                     # [xxx]c1
                     # [   ]c2
-                    C(c2).merged = True
-                    C(c2).reason = "c1为序号，c2空白"
+
+                    #TODO 这个有例外的，如：
+                    #[1][xx]
+                    #---------------
+                    #[ ][xx] =>不合并，从逻辑上，合并也没有错误，但是因为为有边框表格，且后面有不合并的案例，不合并更符合原意图
+                    #[2][xx]
+                    #[ ][xx]
+                    #[3][xx]
+                    #[4][xx]
+                    if has_no_and_blank(c2.table,c2.col_index):
+                        #待定？
+                        #C(c2).merged = False
+                        #C(c2).reason = "c1为序号，c2空白，但是该列允许序号为空"
+                        pass
+                    else:
+                        C(c2).merged = True
+                        C(c2).reason = "c1为序号，c2空白"
                 elif not is_blank(c1) and not is_blank(c2) and is_no(s1 + s2):
                     C(c2).merged = True
                     C(c2).reason = "c1+c2为序号"

@@ -202,19 +202,32 @@ class VObjectType(StrEnum):
     """目录文本"""
     OTHER_TEXT = auto()
     """不重要的文本"""
-
     CODE = auto()
-
+    """代码"""
     FIGURE = auto()
+    """图片"""
     CHART = auto()
+    """图表"""
     TABLE = auto()
+    """表格"""
     SEAL = auto()
+    """印章"""
     FORMULA = auto()
+    """独立公式"""
     INLINE_FORMULA = auto()
-
+    """行内公式"""
     HEADER = auto()
+    """页眉文本"""
     FOOTER = auto()
+    """页脚文本"""
     FOOTNOTE = auto()
+    """脚注文本"""
+
+    HEADER_FIGURE=auto()
+    """页眉图片"""
+
+    FOOTER_FIGURE=auto()
+    """页脚图片"""
 
 
 class VObject:
@@ -231,7 +244,7 @@ class VObject:
         self.cache: Final[dict[str, Any]] = {}
         self.debug: Final[dict[str, Any]] = {}
         self.ocr_chars: Final[list[KChar]] = []
-        """该对象区域试验ocr识别的字符串"""
+        """该对象区域ocr识别的字符"""
         self.vobjects: Final[list[VObject]] = []
         """如果是表格，可以继续包含对象，如：图片等"""
         # self.pdf_chars:Final[list[KChar]]=[]
