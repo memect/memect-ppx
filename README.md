@@ -140,3 +140,74 @@ $vllm serve ZhipuAI/GLM-OCR \
 --gpu-memory-utilization 0.5 \
 --port 4002
 ```
+
+## Docker 部署
+
+```bash
+cp .env.sample .env
+docker compose up -d --build
+```
+
+如果本机构建访问 Debian 官方源较慢，可只在构建阶段设置镜像源：
+
+```bash
+DEBIAN_MIRROR=https://mirrors.aliyun.com/debian \
+PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+docker compose build ppx
+```
+
+CUDA 镜像默认把 `onnxruntime-gpu` 固定到 `PPX_ONNXRUNTIME_GPU_VERSION=1.23.2`，避免新版 wheel 需要 CUDA 13 动态库而当前安装的是 CUDA 12 Python 运行库。
+
+GPU 服务需要宿主机已安装 NVIDIA Container Toolkit，可用 compose profile 启动：
+
+```bash
+COMPOSE_PROFILES=gpu PPX_GPU_IMAGE=hub.wenyinhulian.cn/docparser/ppx-gpu:260702 PPX_GPU_DEVICE_ID=0 docker compose up -d ppx-gpu
+```
+
+多卡机器上可用 `PPX_GPU_DEVICE_ID=0` 选择宿主机显卡。
+
+正式 Linux GPU 镜像建议用脚本构建，默认产出 `hub.wenyinhulian.cn/docparser/ppx-gpu:<YYMMDD>`，例如 `hub.wenyinhulian.cn/docparser/ppx-gpu:260702`：
+
+```bash
+DEBIAN_MIRROR=https://mirrors.cloud.tencent.com/debian \
+PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+scripts/build-gpu-image.sh
+```
+
+脚本同时会打一个本机便捷 alias `ppx:gpu`。发布到私有镜像仓库时可在 Docker 已登录后执行：
+
+```bash
+scripts/build-gpu-image.sh --push
+```
+
+需要固定 tag 时可显式指定：
+
+```bash
+PPX_IMAGE_TAG=260702 scripts/build-gpu-image.sh
+```
+
+默认启动一个 `ppx` API/Web 服务，容器内监听 `9527`，宿主端口由 `PPX_PORT` 控制。常用挂载目录：
+
+- `PPX_DATA_DIR_HOST`：上传、任务和错误文件，默认 `./data`
+- `PPX_LOG_DIR_HOST`：日志目录，默认 `./logs`
+- `PPX_CONF_DIR_HOST`：可选配置目录，默认 `./conf`，需要覆盖默认配置时放 `settings.py`
+
+常用运行变量：
+
+- `PPX_LOG_LEVEL`：日志级别，默认 `INFO`
+- `PPX_CPU`：强制 CPU，可设 `all`、`ocr`、`layout`、`table`、`formula`
+- `PPX_FORMULA`：公式识别模型，默认 `formula-pp`，也可设 `formula-mfr`、`paddle`、`glm`
+
+PDF 服务目录、文件限制、任务队列等业务配置不建议继续堆环境变量；按项目约定在 `conf/settings.py` 里只覆盖需要改的配置项。例如：
+
+```python
+settings = {
+    "pdf_service.data_dir": "./data/pdf",
+    "pdf_service.task_manager.max_running_size": 4,
+    "pdf_service.pdf.max_page_count": 2000,
+}
+```
+
+外部大模型服务通过 URL 配置：`PPX_DEEPSEEK_URL`、`PPX_PADDLE_URL`、`PPX_GLM_URL`、`PPX_BAIDU_URL`。如果模型服务跑在宿主机，Docker 内可使用 `http://host.docker.internal:<port>/v1`；如果跑在同一 compose 网络，改成对应服务名。
+
+安全上不建议把该服务直接暴露到公网。当前 `/api/parse`、`/api/parse/state`、`/admin/gc` 等接口未做鉴权，生产环境应放在内网或反向代理鉴权之后。

@@ -14,6 +14,8 @@
 !/.gitignore
 !/.dockerignore
 !/install
+!/scripts/
+!/scripts/build-gpu-image.sh
 !/.gitattributes
 
 
@@ -30,5 +32,4 @@
 !/docker-compose.yaml
 !/.env.sample
 !/agent-sample.json
-
 
