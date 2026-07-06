@@ -306,7 +306,7 @@ settings: dict[str, Any] = {
                 "name": "OCRModel",
                 "kwargs": {
                     # tiny,small,medium
-                    "model": "small",
+                    "model": "tiny",
                     "det_score_threshold": 0.4,
                     "rec_batch_size": 100,
                     # "det_model_path":None,

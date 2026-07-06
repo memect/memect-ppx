@@ -464,7 +464,12 @@ class Parser:
                             "clipped": is_clipped,
                         }
                     )
-
+            
+            if not (is_filled or is_stroked):
+                self._logger.warning(
+                    "第%s页，忽略没有fill或者stroke的字符,span=%s,bbox=%s",kpage.number,[c["c"] for c in span["chars"]],bbox
+                )
+                return 
             chars = span["chars"]
             i = 0
             while i < len(chars):
@@ -551,29 +556,23 @@ class Parser:
                         pass
                 i = j
                 # print(c)
-                if is_filled or is_stroked:
-                    kpage.pdf_chars.append(
-                        KChar(
-                            kpage,
-                            bbox.to_quad(),
-                            bold=is_bold,
-                            italic=is_italic,
-                            underline=is_underline,
-                            strikeout=is_strikeout,
-                            text=text,
-                            font=font,
-                            color=color,
-                            subtype="superscript" if is_superscript else None,
-                            source=CharSource.PDF,
-                            raw_text=raw_text,
-                            wingdings_text=wingdings_text,
-                        )
+                kpage.pdf_chars.append(
+                    KChar(
+                        kpage,
+                        bbox.to_quad(),
+                        bold=is_bold,
+                        italic=is_italic,
+                        underline=is_underline,
+                        strikeout=is_strikeout,
+                        text=text,
+                        font=font,
+                        color=color,
+                        subtype="superscript" if is_superscript else None,
+                        source=CharSource.PDF,
+                        raw_text=raw_text,
+                        wingdings_text=wingdings_text,
                     )
-                else:
-                    self._logger.warning(
-                        "第%s页，忽略没有fill或者stroke的字符,span=%s,bbox=%s", bbox
-                    )
-                pass
+                )
 
         def parse_image(block: Any):
             pass
