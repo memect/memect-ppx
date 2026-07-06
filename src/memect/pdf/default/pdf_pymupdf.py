@@ -465,9 +465,11 @@ class Parser:
                         }
                     )
             
-            if not (is_filled or is_stroked):
+            if is_clipped or not (is_filled or is_stroked):
+                #如果is_clipped=True，表示为裁剪，文字使用背景颜色
+                #会返回2个，一个是is_clipped=True,一个是is_filled=True
                 self._logger.warning(
-                    "第%s页，忽略没有fill或者stroke的字符,span=%s,bbox=%s",kpage.number,[c["c"] for c in span["chars"]],bbox
+                    "第%s页，忽略没有fill或者stroke的字符,clipped=%s,color=%s,span=%s,bbox=%s",kpage.number,is_clipped,color.rgba,[c["c"] for c in span["chars"]],bbox
                 )
                 return 
             chars = span["chars"]
@@ -555,7 +557,7 @@ class Parser:
                     else:
                         pass
                 i = j
-                # print(c)
+                #print(text,bbox,color.rgba,is_stroked,is_filled,is_clipped)
                 kpage.pdf_chars.append(
                     KChar(
                         kpage,
