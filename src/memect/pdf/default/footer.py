@@ -1,4 +1,6 @@
 
+from math import e
+
 from memect.base.bbox import BBox
 
 from ..base import KDocument, KObject
@@ -15,7 +17,12 @@ class PageFooterParser:
             while i<len(page.objects):
                 obj = page.objects[i]
                 if obj.vobject and obj.vobject.is_footer():
-                    footer_objects.append(obj)
+                    #TODO 有时候会把页眉对象识别为页脚
+                    if obj.bbox.y1<=min(200,page.bbox.cy):
+                        footer_objects.append(obj)
+                    else:
+                        #表示为错误的页脚对象
+                        pass
                     del page.objects[i]
                 else:
                     i+=1

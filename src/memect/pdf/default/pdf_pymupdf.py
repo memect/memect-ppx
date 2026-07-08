@@ -388,8 +388,8 @@ class Parser:
             """判断是否完全重叠，也就是一个cid对应多个字符"""
             # [b1][b2] => b2的宽度为0
             return (
-                math.isclose(b2[0], b2[2])
-                and math.isclose(b2[0], b1[2])
+                math.isclose(b1[0], b2[0])
+                and math.isclose(b1[2], b2[2])
                 and math.isclose(b1[3], b2[3])
                 and math.isclose(b1[1], b2[1])
             )
@@ -400,7 +400,7 @@ class Parser:
                     parse_span(span)
 
         def parse_span(span: Any):
-            verbose = False
+            verbose = True
             alpha = span["alpha"]
             # 原点为左上角
             bbox = span["bbox"]
@@ -451,7 +451,7 @@ class Parser:
             if verbose and debugger.allow("info"):
                 with debugger.group("span"):
                     print("".join(c["c"] for c in span["chars"]))
-                    # print([c["bbox"] for c in span['chars']])
+                    #print([c["bbox"] for c in span['chars']])
                     print(
                         {
                             "bold": is_bold,
@@ -496,11 +496,12 @@ class Parser:
                     raw_text = "".join([c["c"] for c in chars[i:j]])
                     text = self._normalize_text(raw_text)
                     self._logger.warning(
-                        "cid对应多个字符，现在纠正：page=%s,from=%s,to=%s,unicode=0x%04X",
+                        "cid对应多个字符，现在纠正：page=%s,from=%s,to=%s,unicode=0x%04X,bboxes=%s",
                         kpage.number,
                         raw_text,
                         text,
                         ord(text),
+                        [BBox.from_list(c['bbox']).large for c in chars[i:j]]
                     )
                 elif font.wingdings:
                     # TODO 如果是ms生成的pdf，通常使用的是0x20-0xff之间的编码，而且是一一对应
@@ -579,6 +580,43 @@ class Parser:
         def parse_image(block: Any):
             pass
 
+        def filter_chars():
+            #过滤掉重叠的字符，后面的优先，这个概率很小，就不执行了，耗费时间
+            chars=list(kpage.pdf_chars)
+            chars.sort(key=lambda char:char.bbox.y1,reverse=True)
+            i=0
+            while i<len(chars):
+                c1 = chars[i]
+                if c1.bbox.width<5 and c1.bbox.height<5:
+                    #太小的就不考虑了
+                    i+=1
+                    continue
+                k1 = kpage.pdf_chars.index(c1)
+                j=i+1
+                deleted=False
+                while j<len(chars):
+                    c2=chars[j]
+                    if c1.bbox.y1-c2.bbox.y1>=5:
+                        break
+                    if not c1.bbox.expand(dx=1,dy=1).contains(c2.bbox) or not c2.bbox.expand(dx=1,dy=1).contains(c1.bbox):
+                        j+=1
+                        continue
+                    k2 = kpage.pdf_chars.index(c2)
+                    if k1>k2:
+                        self._logger.warning('第%s页，删除被覆盖的字符(c2),c1=%s,c2=%s,c1.bbox=%s,c2.bbox=%s',kpage.number,c1.text,c2.text,c1.bbox,c2.bbox)
+                        del kpage.pdf_chars[k2]
+                        del chars[j]
+
+                    else:
+                        self._logger.warning('第%s页，删除被覆盖的字符(c1),c1=%s,c2=%s,c1.bbox=%s,c2.bbox=%s',kpage.number,c1.text,c2.text,c1.bbox,c2.bbox)
+                        del kpage.pdf_chars[k1]
+                        del chars[i]
+                        deleted=True
+                        break
+                
+                if not deleted:
+                    i+=1
+            pass
         cv2_image = None
 
         def get_cv2_image() -> Any:
@@ -639,6 +677,12 @@ class Parser:
             # 没有文字，就按图片解析，不管是什么样了
             self._logger.info("第%s页没有文字，不需要再解析", kpage.number)
             return
+        
+        #TODO 可以过滤掉重叠的字符，也就是后面的覆盖前面的，出现这种的概率很低，不处理也可以
+        #处理了又需要增加解析时间
+        with timer.watch('filter overlap chars'):
+            filter_chars()
+            pass
 
         with timer.watch("figure"):
             # 如果多个图片组成一个大图，一样按图片解析，不管图片是背景还是扫描（可能覆盖文字）

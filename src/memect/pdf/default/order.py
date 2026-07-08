@@ -31,10 +31,8 @@ class ReadingOrder:
 
     def parse(self,doc:KDocument,max_workers:int=0):
         self._do(self._parse_page, doc.working_pages, max_workers=max_workers)
-        if False:
-            #暂时先不启用，因为很难判断
-            _TableLayout().sort(doc)
-    
+        _TableLayout().parse(doc)
+
     def _parse_page(self,page:KPage):
         #TODO 如果是多页的，还需要考虑表格布局的情况，跨几页
         def expand_objects(objs:Sequence[KObject])->Iterator[KObject]:
@@ -433,10 +431,11 @@ class _TowCut:
 class _TableLayout:
     _logger=logging.getLogger(f'{__module__}.{__qualname__}')
     _debugger=XDebugger(f'{__module__}.{__qualname__}')
+    _front_page_limit:Final=4
     def __init__(self):
         super().__init__()
     
-    def sort(self,doc:KDocument):
+    def parse(self,doc:KDocument):
         #对于有些使用表格布局且跨页的，需要在这里转换为表格，仅仅分栏无法还原顺序，如：
         #-----xxx-----
         #xxx|xxxxxxxxx
@@ -448,6 +447,16 @@ class _TableLayout:
 
         #目前没有太好的办法识别连续多个页面是否是使用表格布局的
         #通过语义判断意义也不大，因内容可以为任意
+        if not self._is_yb(doc):
+            return
+
+        #如果是研究报告，首页的布局比较繁琐，转换为使用表格布局
+        #[c1]|[c3]
+        #[c2]|[c4]
+
+        #第一页可能为封面，需要判断
+        #否则就是仅仅处理第一页
+
         pages = doc.working_pages
         i=0
         while i<len(pages):
@@ -457,106 +466,488 @@ class _TableLayout:
             else:
                 i=j
 
-            
-    def _parse_once(self,index:int,pages:Sequence[KPage]):
+    def _is_yb(self,doc:KDocument):
+        """判断是否为研究报告"""
+        score = 0
+        pages = [
+            page for page in doc.working_pages
+            if page.number<=self._front_page_limit
+        ]
+        text = self._get_text(pages)
+        if not text:
+            return False
+        rules:tuple[tuple[str,int],...]=(
+            ('证券研究报告',3),
+            ('证券研究',2),
+            ('公司研究',2),
+            ('行业研究',2),
+            ('行业周报',2),
+            ('深度报告',2),
+            ('公司报告',2),
+            ('投资评级',2),
+            ('分析师',2),
+            ('研究员',1),
+            ('评级',1),
+            ('目标价',1),
+            ('投资要点',1),
+            ('相对指数表现',1),
+            ('相关研究',1),
+            ('相关报告',1),
+            ('投资建议',1),
+            ('风险提示',1),
+            ('SAC',1),
+            ('请务必阅读',1),
+            ('免责声明',1),
+        )
+        for word,weight in rules:
+            if word in text:
+                score+=weight
+        if '.SH' in text or '.SZ' in text:
+            score+=1
+        if '证券' in text and ('报告' in text or '研究' in text):
+            score+=2
+        return score>=4
 
-        def accept(c1:BBox,c2:BBox,c3:BBox|None,c4:BBox)->bool:
-            #c1|c2
-            #------
-            #c3|c4
-            cx=(c1.x1+c2.x0)/2
-            if c3 is not None:
-                if c3.x1>cx or c4.x0<cx:
-                    return False
-                return True
-            else:
-                if c4.x0<cx:
-                    return False
-                return True
-        if index+1>=len(pages):
+    def _parse_once(self,index:int,pages:Sequence[KPage])->int:
+        # 只处理首页附近的研报版式页，避免把正文双栏页转换成布局表格。
+        page = pages[index]
+        if index>=self._front_page_limit or page.number>self._front_page_limit:
             return -1
-        
-        page1 = pages[index]
-        page2 = pages[index+1]
-        if page1.number+1!=page2.number:
+        if self._is_toc_page(page):
             return -1
-
-        #有太多的可能，现在仅仅处理最常见的一种
-        #c1|c2   =>需要识别为表格[c1,c2]
-        #-----分页
-        #c3|c4   =>需要识别为表格[c3,c4]
-        #------
-        #  |c5   =>需要识别为表格[None,c5]
-        #------分页
-        #c6|     =>需要识别为表格[c6,None]
-
-        columns1 = page1.columns or []
-        c1,c2 = columns1[-2:]
-        #先判断c1和c2
-        #c1|c2
-        if not (c1.x1<c2.x0 and c1.over('y',c2,d=100)):
+        if any(isinstance(obj,KTable) and obj.subtype=='layout' for obj in page.objects):
             return -1
-        
-        tables:list[tuple[KPage,Sequence[BBox]]]=[]
-        tables.append((page1,(c1,c2)))
-        for page2 in pages[index+1:]:
-            page1,(c1,c2) = tables[-1]
-            if page2.number!=page1.number+1:
-                break
-            if not page1.bbox.align('x',page2.bbox,d=2):
-                break
-            columns2 = page2.columns or []
-            if len(columns2)==1:
-                #None|c4
-                c3,c4=None,columns2[0]
-            elif len(columns2)==2:
-                #c3|c4
-                c3,c4=columns2
-            else:
-                break
-
-
-            if not accept(c1,c2,c3,c4):
-                break
-
-            if c3 is None:
-                c3 = c1
-            
-            #调整一下对齐
-            x1=max(c1.x1,c3.x1)
-            x0=min(c2.x0,c4.x0)
-            c1=c1.adjust(x1=x1)
-            c3=c3.adjust(x1=x1)
-            c2=c2.adjust(x0=x0)
-            c4=c4.adjust(x0=x0)
-            tables[-1]=(page1,(c1,c2))
-            tables.append((page2,(c3,c4)))
-
-        if len(tables)<2:
+        layout = self._find_layout_columns(page)
+        if layout is None:
             return -1
-        
+        split,bboxes = layout
+        tables:list[tuple[KPage,tuple[BBox,BBox]]]=[(page,bboxes)]
 
-        self._logger.info('第%s页面使用表格布局',[p.number for p,_ in tables])
-        debugger = self._debugger.bind()
-        #可以简单调整一下bboxes的对齐
+        prev_page = page
+        for next_page in pages[index+1:]:
+            if not self._can_continue_layout_from(prev_page,tables[-1][1]):
+                break
+            if next_page.number>self._front_page_limit:
+                break
+            if self._is_toc_page(next_page):
+                break
+            if next_page.number!=prev_page.number+1:
+                break
+            if not next_page.bbox.align('x',page.bbox,d=2):
+                break
+            bboxes2 = self._find_continuation_columns(next_page,bboxes,split)
+            if bboxes2 is None:
+                break
+            tables.append((next_page,bboxes2))
+            prev_page = next_page
 
-        for page,bboxes in tables:
-            cells:list[KCell]=[]
-            for col_index,cell_bbox in enumerate(bboxes):
-                objs = cell_bbox.get(page.objects,ratio=0.9,remove=True)
-                cell=KCell(page,cell_bbox,row_index=0,col_index=col_index,objects=objs)
-                cells.append(cell)
-            table = KTable(page,BBox.join(bboxes),cells=cells)
-            table.adjust()
-            page.objects.append(table)
-            if debugger.allow('draw',page=page.number):
-                page.draw(
-                    ('page',None),
-                    ('columns',bboxes,'number'),
-                    ('table',table.get_lines2()),
-                    show_type=False,
-                    dir='debug/default/tablelayout'
-                )
-            
-        
+        #group_id = f'layout-{page.number}-{len(tables)}'
+        for table_index,(table_page,table_bboxes) in enumerate(tables):
+            table = self._make_table(table_page,table_bboxes)
+
         return index+len(tables)
+
+    def _find_layout_columns(self,page:KPage)->tuple[float,tuple[BBox,BBox]]|None:
+        if self._is_toc_page(page):
+            return None
+        split = self._find_split(page,page.objects)
+        if split is None:
+            return None
+        left,right,spans = self._split_objects(page,page.objects,split)
+
+        full_width = self._find_full_width_objects(page,page.objects,split)
+        left = [obj for obj in left if obj not in full_width]
+        right = [obj for obj in right if obj not in full_width]
+        left,right = self._trim_above_spanning_title(page,split,full_width,left,right)
+        if not self._is_layout(page,left,right):
+            return None
+
+        # 如果还有大量跨栏对象夹在两列之间，说明更像普通复杂页面，不包装。
+        layout_bbox = BBox.join2([*left,*right],strict=False)
+        if layout_bbox is None:
+            return None
+        if self._split_blockers(page,spans,full_width):
+            return None
+        return split,(BBox.join2(left),BBox.join2(right))
+
+    def _find_continuation_columns(self,page:KPage,ref_bboxes:tuple[BBox,BBox],split:float)->tuple[BBox,BBox]|None:
+        if self._is_toc_page(page):
+            return None
+        if any(isinstance(obj,KTable) and obj.subtype=='layout' for obj in page.objects):
+            return None
+        full_width = self._find_full_width_objects(page,page.objects,split)
+        objects = [
+            obj for obj in page.objects
+            if obj not in full_width
+            and not self._is_page_margin(page,obj.bbox)
+        ]
+        if not objects:
+            return None
+        left,right,spans = self._split_objects(page,objects,split)
+        ref_left,ref_right = ref_bboxes
+        left = [
+            obj for obj in left
+            if obj.bbox.over('x',ref_left,d=10)
+        ]
+        right = [
+            obj for obj in right
+            if obj.bbox.over('x',ref_right,d=10)
+        ]
+        if not right:
+            return None
+        right_bbox = BBox.join2(right)
+        if right_bbox.x1<=split:
+            return None
+        if right_bbox.width<ref_right.width*0.25 and len(right)<2:
+            return None
+        if self._split_blockers(page,spans,()):
+            return None
+        content_bbox = BBox.join2([*left,*right],strict=False)
+        if content_bbox is None:
+            return None
+
+        # 延续页按首页列轴对齐。左列允许为空，右列承接跨页正文/表格。
+        left_bbox = BBox(ref_left.x0,content_bbox.y0,ref_left.x1,content_bbox.y1)
+        right_bbox = BBox(ref_right.x0,content_bbox.y0,max(ref_right.x1,right_bbox.x1),content_bbox.y1)
+        return left_bbox,right_bbox
+
+    def _can_continue_layout_from(self,page:KPage,bboxes:Sequence[BBox])->bool:
+        # 真正的跨页 layout 在上一页通常会吃到页底附近；如果上一页下方还有
+        # 大块空白，下一页更可能是新的章节/目录，不应继续沿用上一页列轴。
+        bbox = BBox.join(bboxes)
+        return bbox.y0<=page.bbox.y0+page.bbox.height*0.20
+
+    def _is_toc_page(self,page:KPage)->bool:
+        text = self._get_text([page])
+        return '内容目录' in text or '图表目录' in text
+
+    def _trim_above_spanning_title(
+        self,
+        page:KPage,
+        split:float,
+        full_width:Sequence[KObject],
+        left:Sequence[KObject],
+        right:Sequence[KObject],
+    )->tuple[list[KObject],list[KObject]]:
+        page_height = page.bbox.height
+        spanning_titles = [
+            obj for obj in full_width
+            if isinstance(obj,KText)
+            and obj.bbox.x0<split
+            and obj.bbox.x1>split
+            and obj.bbox.y0>page.bbox.y0+page_height*0.35
+            and not self._is_page_margin(page,obj.bbox)
+        ]
+        if not spanning_titles:
+            return list(left),list(right)
+        top_cut = min(obj.bbox.y0 for obj in spanning_titles)
+        return (
+            [obj for obj in left if obj.bbox.y1<=top_cut+2],
+            [obj for obj in right if obj.bbox.y1<=top_cut+2],
+        )
+
+    def _make_table(self,page:KPage,bboxes:Sequence[BBox])->KTable|None:
+        debugger = self._debugger.bind(page=page.number)
+        cells:list[KCell]=[]
+        selected:list[KObject]=[]
+        for col_index,cell_bbox in enumerate(bboxes):
+            objs = self._get_cell_objects(page,cell_bbox,exclude=selected)
+            Sorter.sort(objs)
+            selected.extend(objs)
+            cell=KCell(page,cell_bbox,row_index=0,col_index=col_index,objects=objs)
+            cells.append(cell)
+        if not selected:
+            return
+        insert_index = min(page.objects.index(obj) for obj in selected)
+        table = KTable(page,BBox.join(bboxes),cells=cells,subtype='layout')
+        table.adjust()
+        if self._has_right_cell_left_overflow(page,table):
+            return None
+        lists.remove(page.objects,selected,use_is=True)
+        page.objects.insert(insert_index,table)
+        if debugger.allow('draw',page=page.number):
+            page.draw(
+                ('page',None),
+                ('columns',bboxes,'number'),
+                ('table',table.get_lines2()),
+                show_type=False,
+                dir='debug/default/tablelayout'
+            )
+        return table
+
+    def _has_right_cell_left_overflow(self,page:KPage,table:KTable)->bool:
+        hard_limit = max(24,page.bbox.width*0.03)
+        soft_limit = max(12,page.bbox.width*0.02)
+        soft_count = 0
+        for cell in table.cells:
+            if cell.col_index!=1 or cell.col_span!=1:
+                continue
+            for obj in cell.objects:
+                if not isinstance(obj,(KText,KBlock)):
+                    continue
+                overflow = cell.bbox.x0-obj.bbox.x0
+                if overflow>=hard_limit:
+                    return True
+                if overflow>=soft_limit:
+                    soft_count+=1
+                    if soft_count>=2:
+                        return True
+        return False
+
+    def _find_split(self,page:KPage,objects:Sequence[KObject])->float|None:
+        candidates = [
+            obj for obj in objects
+            if self._can_use_for_split(page,obj)
+        ]
+        if len(candidates)<4:
+            return None
+        candidates.sort(key=lambda obj:obj.bbox.cx)
+
+        best:tuple[float,float]|None=None
+        page_width = page.bbox.width
+        min_gutter = max(1,page_width*0.002)
+        min_center_gap = max(16,page_width*0.025)
+
+        def update_best(split:float,extra_score:float=0):
+            nonlocal best
+            if split<=page.bbox.x0+page_width*0.15 or split>=page.bbox.x1-page_width*0.15:
+                return
+            left,right,spans = self._split_objects(page,objects,split)
+            full_width = self._find_full_width_objects(page,objects,split)
+            left = [obj for obj in left if obj not in full_width]
+            right = [obj for obj in right if obj not in full_width]
+            if not self._is_layout(page,left,right):
+                return
+            if self._split_blockers(page,spans,full_width):
+                return
+            left_bbox = BBox.join2(left)
+            right_bbox = BBox.join2(right)
+            gutter = right_bbox.x0-left_bbox.x1
+            if gutter<min_gutter:
+                return
+            overlap = self._overlap_ratio(left_bbox,right_bbox,axis='y')
+            score = gutter+overlap*30+self._sidebar_score(left,right)*5+self._side_panel_score(page,left_bbox,right_bbox,left,right)+extra_score
+            if best is None or score>best[0]:
+                best=(score,split)
+
+        for i in range(1,len(candidates)):
+            center_gap = candidates[i].bbox.cx-candidates[i-1].bbox.cx
+            if center_gap<min_center_gap:
+                continue
+            left = candidates[:i]
+            right = candidates[i:]
+            if len(left)<1 or len(right)<1:
+                continue
+            left_bbox = BBox.join2(left)
+            right_bbox = BBox.join2(right)
+            gutter = right_bbox.x0-left_bbox.x1
+            if gutter<min_gutter:
+                continue
+            split = (left_bbox.x1+right_bbox.x0)/2
+            update_best(split,center_gap*0.3)
+
+        # 有些首页标题横跨左右栏，会干扰按中心排序的切分；再扫描 x 区间空隙，
+        # 允许横跨 gutter 的标题作为通栏对象排除。
+        for left_obj in candidates:
+            for right_obj in candidates:
+                gutter = right_obj.bbox.x0-left_obj.bbox.x1
+                if gutter>=min_gutter:
+                    update_best((left_obj.bbox.x1+right_obj.bbox.x0)/2,gutter)
+        if best is None:
+            return None
+        return best[1]
+
+    def _split_objects(self,page:KPage,objects:Sequence[KObject],split:float)->tuple[list[KObject],list[KObject],list[KObject]]:
+        left:list[KObject]=[]
+        right:list[KObject]=[]
+        spans:list[KObject]=[]
+        d=max(2,page.bbox.width*0.005)
+        for obj in objects:
+            bbox = obj.bbox
+            if bbox.x1<=split+d:
+                left.append(obj)
+            elif bbox.x0>=split-d:
+                right.append(obj)
+            elif min(split-bbox.x0,bbox.x1-split)<=max(12,page.bbox.width*0.02):
+                if bbox.cx<split:
+                    left.append(obj)
+                else:
+                    right.append(obj)
+            else:
+                spans.append(obj)
+        return left,right,spans
+
+    def _find_full_width_objects(self,page:KPage,objects:Sequence[KObject],split:float)->Sequence[KObject]:
+        full_width:set[KObject]=set()
+        page_width = page.bbox.width
+        for obj in objects:
+            bbox = obj.bbox
+            if self._is_page_spanning(page,bbox) or self._is_cross_column_title(page,bbox,split):
+                full_width.add(obj)
+
+        for line in Sorter.get_lines(objects):
+            bbox = BBox.join2(line)
+            if bbox.x0<split and bbox.x1>split and bbox.width>page_width*0.78 and len(line)>=3:
+                full_width.update(line)
+        return tuple(full_width)
+
+    def _is_layout(self,page:KPage,left:Sequence[KObject],right:Sequence[KObject])->bool:
+        if len(left)<2 or len(right)<2:
+            return False
+        left_bbox = BBox.join2(left)
+        right_bbox = BBox.join2(right)
+        if left_bbox is None or right_bbox is None:
+            return False
+        min_column_width = max(36,page.bbox.width*0.10)
+        if min(left_bbox.width,right_bbox.width)<min_column_width:
+            return False
+        if right_bbox.x0-left_bbox.x1<1:
+            return False
+        if self._overlap_ratio(left_bbox,right_bbox,axis='y')<0.25:
+            return False
+        sidebar_score = self._sidebar_score(left,right)
+        if sidebar_score<=0:
+            return False
+        width_ratio = min(left_bbox.width,right_bbox.width)/max(left_bbox.width,right_bbox.width)
+        # 版式侧栏通常明显窄一些；宽度接近时也允许，但必须有很强侧栏信号。
+        return width_ratio<0.82 or sidebar_score>=3 or self._side_panel_score(page,left_bbox,right_bbox,left,right)>0
+
+    def _sidebar_score(self,left:Sequence[KObject],right:Sequence[KObject])->int:
+        return max(self._sidebar_score_of(left),self._sidebar_score_of(right))
+
+    def _sidebar_score_of(self,objs:Sequence[KObject])->int:
+        text = self._get_text(objs)
+        result = 0
+        for word in (
+            '分析师','研究员','投资评级','评级','目标价','交易数据','股价','走势图','走势比较',
+            '相对指数表现','公司简介','相关报告','相关研究','资料来源','数据来源','请务必阅读',
+            '总股本','流通A股','52周','市值','EPS','PE','PB','Wind'
+        ):
+            if word in text:
+                result+=1
+        return result
+
+    def _side_panel_score(self,page:KPage,left_bbox:BBox,right_bbox:BBox,left:Sequence[KObject],right:Sequence[KObject])->float:
+        page_width = page.bbox.width
+        left_width_ratio = left_bbox.width/page_width
+        right_width_ratio = right_bbox.width/page_width
+        score = 0.0
+
+        # 研报首页常见为“左/右窄信息栏 + 主正文”。窄栏不一定在页面中线附近，
+        # 需要在 split 打分时优先选择稳定的侧边栏边界。
+        if left_width_ratio<=0.42 and right_bbox.width>=page_width*0.35:
+            if left_bbox.x0<=page.bbox.x0+page_width*0.24:
+                score+=18+self._sidebar_score_of(left)*4
+        if right_width_ratio<=0.42 and left_bbox.width>=page_width*0.35:
+            if right_bbox.x1>=page.bbox.x1-page_width*0.12 or right_bbox.x0>=page.bbox.x0+page_width*0.52:
+                score+=18+self._sidebar_score_of(right)*4
+        return score
+
+    def _can_use_for_split(self,page:KPage,obj:KObject)->bool:
+        bbox = obj.bbox
+        if bbox.width<=1 or bbox.height<=1:
+            return False
+        if self._is_page_spanning(page,bbox):
+            return False
+        if bbox.height>page.bbox.height*0.85:
+            return False
+        if bbox.area<4:
+            return False
+        return isinstance(obj,(KText,KTable,KFigure,KBlock))
+
+    def _is_page_spanning(self,page:KPage,bbox:BBox)->bool:
+        page_width = page.bbox.width
+        return (
+            bbox.width>page_width*0.68
+            and bbox.x0<page.bbox.x0+page_width*0.22
+            and bbox.x1>page.bbox.x1-page_width*0.22
+        )
+
+    def _is_cross_column_title(self,page:KPage,bbox:BBox,split:float)->bool:
+        page_width = page.bbox.width
+        page_height = page.bbox.height
+        if (
+            bbox.x0<split
+            and bbox.x1>split
+            and bbox.y0>page.bbox.y0+page_height*0.70
+            and bbox.width>page_width*0.30
+        ):
+            return True
+        return (
+            bbox.x0<split
+            and bbox.x1>split
+            and bbox.width>page_width*0.55
+            and bbox.x0<page.bbox.x0+page_width*0.24
+            and bbox.x1>page.bbox.x1-page_width*0.18
+        )
+
+    def _get_cell_objects(self,page:KPage,cell_bbox:BBox,*,exclude:Sequence[KObject])->list[KObject]:
+        objs:list[KObject]=[]
+        for obj in page.objects:
+            if obj in exclude:
+                continue
+            bbox = obj.bbox
+            inter = cell_bbox.intersect(bbox)
+            if inter is None:
+                continue
+            if inter.height/max(1,bbox.height)<0.5:
+                continue
+            if cell_bbox.x0<=bbox.cx<=cell_bbox.x1:
+                objs.append(obj)
+                continue
+            if inter.width/max(1,min(bbox.width,cell_bbox.width))>=0.55:
+                objs.append(obj)
+        return objs
+
+    def _is_page_margin(self,page:KPage,bbox:BBox)->bool:
+        page_height = page.bbox.height
+        return (
+            bbox.y0>page.bbox.y1-page_height*0.06
+            or bbox.y1<page.bbox.y0+page_height*0.10
+        )
+
+    def _split_blockers(self,page:KPage,spans:Sequence[KObject],full_width:Sequence[KObject])->list[KObject]:
+        page_width = page.bbox.width
+        return [
+            obj for obj in spans
+            if obj not in full_width
+            and obj.bbox.width>page_width*0.08
+            and obj.bbox.height>4
+        ]
+
+    def _overlap_ratio(self,b1:BBox,b2:BBox,*,axis:str)->float:
+        if axis=='x':
+            start = max(b1.x0,b2.x0)
+            end = min(b1.x1,b2.x1)
+            base = min(b1.width,b2.width)
+        else:
+            start = max(b1.y0,b2.y0)
+            end = min(b1.y1,b2.y1)
+            base = min(b1.height,b2.height)
+        if base<=0:
+            return 0
+        return max(0,end-start)/base
+
+    def _get_text(self,items:Sequence[KObject]|Sequence[KPage])->str:
+        buf:list[str]=[]
+        def add_obj(obj:KObject):
+            if isinstance(obj,KText):
+                buf.append(obj.text)
+            elif isinstance(obj,KTable):
+                for cell in obj.cells:
+                    for child in cell.objects:
+                        add_obj(child)
+            elif isinstance(obj,KBlock):
+                for child in obj.objects:
+                    add_obj(child)
+        for item in items:
+            if isinstance(item,KPage):
+                if item.number==1:
+                    #如果是首页，研报可能把一些文本也识别为页眉
+                    for obj in item.header.objects:
+                        add_obj(obj)
+                for obj in item.objects:
+                    add_obj(obj)
+            else:
+                add_obj(item)
+        return '\n'.join(buf)

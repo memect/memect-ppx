@@ -322,7 +322,8 @@ settings: dict[str, Any] = {
                 "kwargs": {
                     # "model_path":get_model_path('./models/pp_layoutv2.onnx'),
                     #"model_path":get_model_path('./models/pp_layoutv3.onnx'),
-                    "version":"v3",
+                    "version":"v2",
+                    "score_threshold":0.5,
                     "engine": _layout_device["engine"],
                     "use_cuda": _layout_device.get("use_cuda", False),
                     "use_cann": _layout_device.get("use_cann", False),
