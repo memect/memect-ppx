@@ -521,9 +521,7 @@ class Parser:
                         #  [--c2--]
                         # 水平重叠的多，调整y
                         if c1.bbox.height > c2.bbox.height:
-                            print('=====>KK',c1.bbox,c2.bbox)
                             c1.bbox = c1.bbox.adjust(y0=c2.bbox.y1 + 1)
-                            print('=====>k2',c1.bbox,c2.bbox)
                         else:
                             c2.bbox = c2.bbox.adjust(y1=c1.bbox.y0 - 1)
                     else:

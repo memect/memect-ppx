@@ -163,7 +163,7 @@ class BlockParser:
 
         # 再处理跨页的情况，可能需要参考前后页
         for page in doc.working_pages:
-            # self._parse_page2(page)
+            self._parse_page2(page)
             pass
 
     def parse2(self, doc: KDocument):
@@ -383,40 +383,44 @@ class BlockParser:
 
         debugger: Final = self._debugger.bind(page=page.number)
 
-        def is_title(text: Text) -> bool:
+        def is_title(text: KText) -> bool:
             if self._title_pattern.fullmatch(text.text2) is not None:
                 return True
             else:
                 return False
 
-        def is_source(text: Text) -> bool:
+        def is_source(text: KText) -> bool:
             # TODO 如果只是部分内容？
             if self._source_pattern.fullmatch(text.text2) is not None:
                 return True
             else:
                 return False
 
-        def find_table(page: Page, dir: Literal["next", "prev"]) -> Table | None:
+
+        def get_table(page:KPage,index:int)->KTable|None:
+            objects = sorted(page.objects,key=lambda obj:obj.bbox.y1,reverse=True)
+            if not objects:
+                return None
+            obj = objects[index]
+            if isinstance(obj,KTable):
+                #TODO 还需要判断是否为图表布局表格
+                return obj
+            else:
+                return None
+        def find_table(page: KPage, dir: Literal["next", "prev"]) -> KTable | None:
             # TODO 严格的需要先判断页面大小是否一致？对于奇葩的表格，也可能不一致
-            if (
-                dir == "next"
-                and page.next_page is not None
-                and page.next_page.body.objects
-                and isinstance(page.next_page.body.objects[0], Table)
-            ):
+            next_page = page.doc.get_working_page(page.number+1)
+            prev_page = page.doc.get_working_page(page.number-1)
+            
+            if dir == "next" and next_page is not None and abs(page.width-next_page.width)<=2:
                 # TODO 可以判断是否为title/figure/source表格
-                return cast(Table, page.next_page.body.objects[0])
-            elif (
-                dir == "prev"
-                and page.prev_page is not None
-                and page.prev_page.body.objects
-                and isinstance(page.prev_page.body.objects[-1], Table)
-            ):
-                return cast(Table, page.prev_page.body.objects[-1])
+                return get_table(next_page,0)
+            elif dir == "prev" and prev_page is not None and abs(page.width-prev_page.width)<=2:
+                return get_table(prev_page,-1)
             else:
                 return None
 
-        def find_bottom_titles(page: Page, strict: bool = True):
+        def find_titles(page: KPage, strict: bool = True):
             # 如果没有分栏，如下查找是正确的
             # 在页面的底部，找到如下：没有图片的
             # [title][title]     =>需要理解为表格
@@ -427,21 +431,21 @@ class BlockParser:
             # [xxxxx]|[figure]
             # [title]|
 
-            lines = Sorter.get_lines(page.body.objects)
+            lines = Sorter.get_lines(page.objects)
             if len(lines) < 1:
                 return
 
             # 取最后一行，且应该为Text
             line = lines[-1]
-            if not all(isinstance(obj, Text) for obj in line):
+            if not all(isinstance(obj, KText) for obj in line):
                 return
 
-            line = cast(list[Text], line)
+            line = cast(list[KText], line)
             parts: list[Part] = []
             for text in line:
                 # 判断是否为标题
                 if is_title(text):
-                    part = Part(page, "title", titles=[text])
+                    part = Part(page,text.bbox, "title", titles=[text])
                     parts.append(part)
                 else:
                     break
@@ -467,8 +471,10 @@ class BlockParser:
                     # 或者根据模式找到n个标题？
                     i = get_max_distance_index(text)
                     if i > 0:
-                        t1 = text.select(0, i)
-                        t2 = text.select(i)
+                        t1=KText.from_objects(text.objects[0:i])
+                        t2=KText.from_objects(text.objects[i:])
+                        assert t1 is not None
+                        assert t2 is not None
                         if is_title(t1) and is_title(t2):
                             self._logger.warning(
                                 "cut title,page=%s,title1=%s,title2=%s",
@@ -477,8 +483,8 @@ class BlockParser:
                                 t2.text,
                             )
                             parts = [
-                                Part(page, "title", titles=[t1]),
-                                Part(page, "title", titles=[t2]),
+                                Part(page,t1.bbox, "title", titles=[t1]),
+                                Part(page,t2.bbox, "title", titles=[t2]),
                             ]
 
                 if next_table.col_num != len(parts):
@@ -489,25 +495,33 @@ class BlockParser:
             # 如果有2个标题的，还需要判断下一页吗？
             # 可以根据这2个对齐？暂时不需要了，跨页的时候再处理？
             table = self._make_table(page, parts)
-            page.body.remove(line)
-            page.body.add([table])
+            if next_table is not None and next_table.bbox.over('x',table.bbox,d=20):
+                #TODO 需要考虑在没有分栏的情况下，所以限制为2
+                x0=min(table.bbox.x0,next_table.bbox.x0)
+                x1=max(table.bbox.x1,next_table.bbox.x1)
+                table.adjust(x0=x0,x1=x1)
+                next_table.adjust(x0=x0,x1=x1)
 
+            k=page.objects.index(line[0])
+            page.objects.insert(k,table)
+            lists.remove(page.objects,line)
+            
             if debugger.allow("gui"):
-                table.show("bottom table")
+                pass
 
-        def find_top_sources(page: Page, strict: bool = True):
-            lines = Sorter.get_lines(page.body.objects)
+        def find_sources(page: KPage, strict: bool = True):
+            lines = Sorter.get_lines(page.objects)
             if len(lines) < 1:
                 return
 
             line = lines[0]
-            if not all(isinstance(t, Text) for t in line):
+            if not all(isinstance(t, KText) for t in line):
                 return
 
             parts: list[Part] = []
             for text in line:
                 if is_source(text):
-                    part = Part(page, "source", sources=[text])
+                    part = Part(page,text.bbox, "source", sources=[text])
                     parts.append(part)
                 else:
                     break
@@ -522,13 +536,21 @@ class BlockParser:
 
             # json2doc/report/13.pdf 27-28
             table = self._make_table(page, parts)
-            page.body.remove(line)
-            page.body.add([table])
+            if prev_table is not None and prev_table.bbox.over('x',table.bbox,d=20):
+                #TODO 需要考虑在没有分栏的情况下，所以限制为2
+                x0=min(table.bbox.x0,prev_table.bbox.x0)
+                x1=max(table.bbox.x1,prev_table.bbox.x1)
+                table.adjust(x0=x0,x1=x1)
+                prev_table.adjust(x0=x0,x1=x1)
+
+            k = page.objects.index(line[0])
+            page.objects.insert(k,table)
+            lists.remove(page.objects,line)
 
             if debugger.allow("gui"):
-                table.show("top table")
+                pass
 
-        def get_max_distance_index(text: Text) -> int:
+        def get_max_distance_index(text: KText) -> int:
             values: list[tuple[int, float]] = []
             for i in range(1, len(text.objects)):
                 obj1 = text.objects[i - 1]
@@ -544,8 +566,8 @@ class BlockParser:
             else:
                 return -1
 
-        find_bottom_titles(page)
-        find_top_sources(page)
+        find_titles(page)
+        find_sources(page)
         # page.body.sort()
         if debugger.allow("draw"):
             # page.show('final body',objects=page.body.objects)
@@ -1093,7 +1115,7 @@ class BlockParser:
         cells.extend(source_row)
         if common_source_cell is not None:
             cells.append(common_source_cell)
-        table = KTable(page, table_bbox,cells=cells,subtype='layout')
+        table = KTable(page, table_bbox,cells=cells,subtype='wbk')
         if debugger.allow("info"):
             with debugger.group("cells"):
                 for c in table.cells:

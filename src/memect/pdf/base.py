@@ -3299,8 +3299,11 @@ class KTable(KObject):
             # 有对象剩余？
             pass
 
-    def adjust(self):
+    def adjust(self,*,x0:float|None=None,x1:float|None=None):
         """表示调整一下cell的bbox，以便对齐，如果是来自有边框解析，不需要调用这个方法。这个方法合适构造了逻辑表格然后为了美观，调整一下"""
+
+        ref_x0:Final=x0
+        ref_x1:Final=x1
 
         def adjust_y():
             y1 = self.bbox.y1
@@ -3340,6 +3343,8 @@ class KTable(KObject):
 
         def adjust_x():
             x0 = self.bbox.x0
+            if ref_x0 is not None:
+                x0 = min(x0,ref_x0)
             for i in range(self.col_num):
                 #
                 column = self.get_column(i)
@@ -3362,6 +3367,8 @@ class KTable(KObject):
                     x1 = (a.x1 + b.x0) / 2
                 else:
                     x1 = self.bbox.x1
+                    if ref_x1 is not None:
+                        x1=max(x1,ref_x1)
 
                 for cell in column:
                     # 设置x
@@ -3377,6 +3384,10 @@ class KTable(KObject):
 
         adjust_y()
         adjust_x()
+
+        if x0 is not None or x1 is not None:
+            bbox = BBox.join2(self.cells)
+            self.bbox=bbox
 
     def align(self,*,x_axis:Sequence[float]|None=None,y_axis:Sequence[float]|None=None,force:bool=False)->bool:
         """根据新的坐标调整单元格的位置，返回False表示无法调整
