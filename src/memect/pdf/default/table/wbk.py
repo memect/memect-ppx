@@ -2028,6 +2028,29 @@ class XParser:
     
     def parse(self,doc:KDocument):
 
+        def check_chart_layout(t1:KTable,t2:KTable):
+            c1=t1.chart_layout
+            c2=t2.chart_layout
+            if c1 is None and c2 is None:
+                #普通表格，返回False表示按普通处理
+                return False
+            elif c1 is None and c2 is not None:
+                return True
+            elif c1 is not None and c2 is None:
+                return True
+            elif c1 is not None and c2 is not None:
+                #两个都是图表
+                if c1.is_title() and c2.no_title():
+                    self._align(t1,t2)
+                    return True
+                elif c1.no_source() and c2.is_source():
+                    self._align(t1,t2)
+                    return True
+                else:
+                    #不需要执行对齐
+                    return True
+            else:
+                return False
         objects:list[KObject]=[]
         for page in doc.working_pages:
             objects.extend(page.objects)
@@ -2045,7 +2068,9 @@ class XParser:
                     self._align(t1,t2)
                 elif t1.is_wbk() and t2.is_wbk() and mode==_JoinMode.PAGE:
                     #如果都是无边框，且可以合并，先快速对齐，如果没有，重新解析
-                    if not self._align(t1,t2):
+                    if check_chart_layout(t1,t2):
+                        pass
+                    elif not self._align(t1,t2):
                         self._parse([t1,t2],seqs)
                 elif t1.is_ybk() and t2.is_wbk() and mode==_JoinMode.PAGE:
                     #t1和t2有一个有边框，有一个使用无边框，如：彩色表格会出现这种
@@ -2166,7 +2191,7 @@ class XParser:
                 elif t2.is_ybk():
                     x1=b2.x1
                 else:
-                    x0=min(b1.x0,b2.x0)
+                    #x0=min(b1.x0,b2.x0)
                     x1=max(b1.x1,b2.x1)
                 if axis[-1]<x1:
                     #TODO 严格的判断是否还符合content_bbox的限制
@@ -2206,8 +2231,9 @@ class XParser:
         for table in reversed(tables):
             m=Matrix().translate(0,-table.bbox.y0+y0)
             tb=table.bbox.adjust(y0=y0,y1=y0+table.bbox.height)
+            #如果是来自纯无边框解析的，有这个存在，如果是来自手动无边框的，就没有
             #必须有cells=[_Cell(),_Cell()]
-            cells:list[_Cell]=table.cache['cells']
+            cells:list[_Cell]=table.cache.get('cells') or [_Cell(c.bbox) for c in table.cells]
             new_cells:list[_Cell]=[]
             for cell in cells:
                 cell = cell.copy()

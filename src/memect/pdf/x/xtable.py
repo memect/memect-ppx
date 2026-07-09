@@ -316,8 +316,21 @@ class XTableParser:
         
         def check_wbk(t1:KTable,t2:KTable)->bool:
             #如果没有列对齐就合并，会出现很复杂的结构
-            #
-            return True
+            c1=t1.chart_layout
+            c2=t2.chart_layout
+            if c1 and c2:
+                if c1.is_title() and c2.no_title():
+                    return True
+                elif c1.no_source() and c2.is_source():
+                    return True
+                else:
+                    return False
+            elif c1 and not c2:
+                return False
+            elif not c1 and c2:
+                return False
+            else:
+                return True
         
         def check_layout(t1:KTable,t2:KTable)->bool:
             if t1.col_num!=t2.col_num:

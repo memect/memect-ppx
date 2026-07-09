@@ -2774,6 +2774,26 @@ class TableIntent(StrEnum):
     DATA=auto()
     LAYOUT=auto()
 
+class ChartLayout:
+    def __init__(self,title:bool=False,body:bool=False,source:bool=False):
+        super().__init__()
+        self.title=title
+        self.body=body
+        self.source=source
+
+    def is_ok(self)->bool:
+        return self.title and self.body and self.source
+    def is_title(self)->bool:
+        return self.title and not self.body and not self.source
+    def is_source(self)->bool:
+        return self.source and not self.body and not self.title
+    
+    def no_source(self)->bool:
+        return self.body and not self.source
+    
+    def no_title(self)->bool:
+        return self.body and not self.title
+
 class KTable(KObject):
     type: str = "table"
 
@@ -2820,6 +2840,9 @@ class KTable(KObject):
 
         self.row_colors:list[KColor]=[]
         self.col_colors:list[KColor]=[]
+
+        self.chart_layout:ChartLayout|None=None
+        """表示为图表布局，且获得对应的信息，方便跨页表格合并"""
 
     def _create_grid(self):
         # TODO 如果需要快速的访问，建立一个n*m的grid

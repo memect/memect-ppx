@@ -879,6 +879,9 @@ class Parser:
                     # kpage.pdf_paths.append(block)
                     # 先处理了特殊的矩形合并？
                     new_paths.append(path)
+                elif not path['isrect'] and not path['stroked'] and path['alpha']>0:
+                    #填充矩形，获得背景颜色
+                    new_paths.append(path)
                 else:
                     # 曲线或者斜线，去掉
                     pass

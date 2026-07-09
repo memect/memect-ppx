@@ -15,7 +15,9 @@ class TableStyleParser:
                 if isinstance(table,KTable):
                     #如果是layout，查找单元格是否包含表格
                     #不再层层递归下去
-                    if table.is_layout():
+                    if table.chart_layout is not None:
+                        pass
+                    elif table.is_layout():
                         for cell in table.cells:
                             for obj in cell.objects:
                                 if isinstance(obj,KTable):
@@ -60,7 +62,15 @@ class TableStyleParser:
                 self._parse_cell(cell)
     
     def _parse_cell(self,cell:KCell):
-        rects  = cell.bbox.get(cell.page.pdf_rects,ratio=0.5)
+        #rects  = cell.bbox.get(cell.page.pdf_rects,ratio=0.5)
+        rects:list[KRect]=[]
+        for rect in cell.page.pdf_rects:
+            xb = cell.bbox.intersect(rect.bbox)
+            #因为背景矩形可能比cell大
+            area=min(cell.bbox.area,rect.bbox.area)
+            if xb and xb.area/area>=0.5:
+                rects.append(rect)
+
         if not rects:
             return
 
