@@ -1,6 +1,8 @@
 
 
-from typing import Any
+from typing import Any, Final
+
+from memect.base.bbox import BBox
 
 from .base import KCell, KColor, KDocument, KRect, KTable
 
@@ -63,32 +65,38 @@ class TableStyleParser:
     
     def _parse_cell(self,cell:KCell):
         #rects  = cell.bbox.get(cell.page.pdf_rects,ratio=0.5)
-        rects:list[KRect]=[]
+        rects:list[tuple[KRect,BBox]]=[]
+        #cb:Final= cell.content_bbox or cell.bbox
+        cb = cell.bbox
         for rect in cell.page.pdf_rects:
-            xb = cell.bbox.intersect(rect.bbox)
+            xb = cb.intersect(rect.bbox)
             #因为背景矩形可能比cell大
-            area=min(cell.bbox.area,rect.bbox.area)
+            area=min(cb.area,rect.bbox.area)
             if xb and xb.area/area>=0.5:
-                rects.append(rect)
+                rects.append((rect,xb))
 
         if not rects:
             return
-
+        
+        if len(rects)==1:
+            cell.color = rects[0][0].color
+            return
+        
+        #如果有多个矩形，取合并后颜色最大的
         from shapely.geometry import Polygon
         from shapely.ops import unary_union
 
         #简单的就是获得总的面积，根据颜色划分？
-        colors:dict[KColor,list[KRect]]={}
-        for rect in rects:
+        colors:dict[KColor,list[BBox]]={}
+        for rect,xb in rects:
             group = colors.setdefault(rect.color,[])
-            group.append(rect)
+            group.append(xb)
         
         areas:list[tuple[Any,float]]=[]
         for color,group in colors.items():
             #这是简单的算法，不考虑重叠
             polys:list[Polygon]=[]
-            for rect in group:
-                bbox = rect.bbox
+            for bbox in group:
                 poly = Polygon(((bbox.x0,bbox.y0),(bbox.x1,bbox.y0),(bbox.x1,bbox.y1),(bbox.x0,bbox.y1)))
                 polys.append(poly)
             u = unary_union(polys)
@@ -96,11 +104,7 @@ class TableStyleParser:
         #排序
         areas.sort(key=lambda item:item[1],reverse=True)
         color,area = areas[0]
-        if area/cell.bbox.area>=0.5:
-            cell.color = color
-        else:
-            pass
-
+        cell.color = color
     
     
 

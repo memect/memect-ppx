@@ -881,7 +881,9 @@ class Parser:
                     new_paths.append(path)
                 elif not path['isrect'] and not path['stroked'] and path['alpha']>0:
                     #填充矩形，获得背景颜色
-                    new_paths.append(path)
+                    #不一定为矩形，暂时就忽略了
+                    #new_paths.append(path)
+                    pass
                 else:
                     # 曲线或者斜线，去掉
                     pass
