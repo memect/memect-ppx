@@ -558,21 +558,23 @@ def _require_train_annotations(stats: dict[str, Any]) -> None:
         raise typer.BadParameter("训练集没有任何标注框，请先用LabelMe补充标注")
 
 
-def _find_paddlex_root(root: Path | None) -> Path:
-    candidates: list[Path] = []
-    if root is not None:
-        candidates.append(root)
-    env_root = os.environ.get("PADDLEX_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
-    cwd = Path.cwd()
-    candidates.extend([cwd, cwd / "PaddleX", cwd / "paddlex"])
+def _is_paddlex_root(path: Path) -> bool:
+    return (path / "main.py").is_file() and (path / "paddlex").is_dir()
 
+
+def _find_paddlex_root(root: Path | None) -> Path:
+    if root is not None:
+        candidate = root.expanduser().resolve()
+        if _is_paddlex_root(candidate):
+            return candidate
+        raise typer.BadParameter(f"PaddleX源码目录无效: {candidate}")
+
+    candidates = [Path("./PaddleX"), Path("../PaddleX")]
     for candidate in candidates:
         candidate = candidate.expanduser().resolve()
-        if (candidate / "main.py").is_file() and (candidate / "paddlex").is_dir():
+        if _is_paddlex_root(candidate):
             return candidate
-    raise typer.BadParameter("找不到PaddleX源码目录，请设置--paddlex-root或PADDLEX_ROOT")
+    raise typer.BadParameter("找不到PaddleX源码目录，默认查找./PaddleX和../PaddleX，请设置--paddlex-root")
 
 
 def _resolve_config(
@@ -600,8 +602,11 @@ def _config_arg(path: Path, paddlex_root: Path) -> str:
         return str(path)
 
 
-def _resolve_python(python: Path | None) -> str:
+def _resolve_python(python: Path | None, paddlex_root: Path) -> str:
     if python is None:
+        default = paddlex_root / ".venv" / "bin" / "python3"
+        if default.is_file():
+            return str(default)
         return sys.executable
     path = python.expanduser().resolve()
     if not path.is_file():
@@ -611,7 +616,7 @@ def _resolve_python(python: Path | None) -> str:
 
 def _paddlex_command(
     *,
-    python: Path | None,
+    python_cmd: str,
     paddlex_root: Path,
     config: Path,
     mode: Literal["check_dataset", "train", "evaluate"],
@@ -623,7 +628,7 @@ def _paddlex_command(
     overrides: Sequence[str] | None,
 ) -> list[str]:
     cmd = [
-        _resolve_python(python),
+        python_cmd,
         "main.py",
         "-c",
         _config_arg(config, paddlex_root),
@@ -670,13 +675,14 @@ def _run_paddlex(
     train: bool,
 ) -> None:
     root = _find_paddlex_root(paddlex_root)
+    python_cmd = _resolve_python(python, root)
     model_name = paddlex_model or DEFAULT_PADDLEX_MODELS[version]
     config_path = _resolve_config(root, config=config, model_name=model_name)
     output_path = output_dir or paths["root"] / "output" / f"layout-{version}"
 
     if check_dataset:
         cmd = _paddlex_command(
-            python=python,
+            python_cmd=python_cmd,
             paddlex_root=root,
             config=config_path,
             mode="check_dataset",
@@ -691,7 +697,7 @@ def _run_paddlex(
 
     if train:
         cmd = _paddlex_command(
-            python=python,
+            python_cmd=python_cmd,
             paddlex_root=root,
             config=config_path,
             mode="train",
@@ -872,8 +878,8 @@ def layout(
     val_ratio: Annotated[float, typer.Option(help="验证集比例")] = 0.1,
     seed: Annotated[int, typer.Option(help="训练/验证划分随机种子")] = 2026,
     append_labels: Annotated[bool, typer.Option(help="转换时自动追加label.txt中没有的新标签")] = False,
-    python: Annotated[Path | None, typer.Option(help="执行PaddleX main.py的Python解释器，默认使用当前sys.executable")] = None,
-    paddlex_root: Annotated[Path | None, typer.Option(help="PaddleX源码目录，或设置PADDLEX_ROOT")] = None,
+    python: Annotated[Path | None, typer.Option(help="执行PaddleX main.py的Python解释器，默认使用PaddleX/.venv/bin/python3，否则使用当前sys.executable")] = None,
+    paddlex_root: Annotated[Path | None, typer.Option(help="PaddleX源码目录，默认查找./PaddleX和../PaddleX")] = None,
     config: Annotated[Path | None, typer.Option(help="PaddleX训练配置，相对PaddleX根目录或绝对路径")] = None,
     paddlex_model: Annotated[str | None, typer.Option(help="PaddleX layout_detection配置模型名")] = None,
     output_dir: Annotated[Path | None, typer.Option("--output", help="训练输出目录")] = None,
