@@ -252,6 +252,9 @@ class DefaultParser:
 
                     if is_logo(vobj, figures, chars):
                         pass
+                    elif len(figures)==1 and len(invalid_chars)==0 and (figures[0].bbox.width<20 and figures[0].bbox.height<20):
+                        #可能为小logo？[logo]xxxxxx
+                        pass
                     elif len(chars) == 0:
                         # 如果没有字符，就使用ocr（也有可能原文是一个logo或者其他，不管了）
                         objs.append((vobj, [vobj.quad]))
@@ -261,7 +264,6 @@ class DefaultParser:
                         # 如果在表格中，可能为普通的图片，也可能为特殊效果的文字
                         # 有些图片为单个字符，为了避免截图过小，合并连续的多个图片
                         # groups = merge_figures(figures+invalid_chars)
-
                         groups = merge_bboxes(figures + invalid_chars)
                         objs.append((vobj, [get_bbox(group) for group in groups]))
                         # TODO 可以把无效的pdf字符也删除了？或者后续直接1对1匹配即可？
@@ -627,7 +629,7 @@ class DefaultParser:
 
         def parse_page(page: KPage):
             for vobj in page.vobjects:
-                make_text(page, vobj)
+                make_text(page, vobj,use_figures=True)
 
         self._do(parse_page, doc.working_pages, max_workers=max_workers)
 
