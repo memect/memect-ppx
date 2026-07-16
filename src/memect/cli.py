@@ -11,8 +11,15 @@ import httpx
 import typer
 
 from .pdf.base import Backend, OCRMode, ParseMode, TableMode, TreeBackend
+from .train.layout import layout as layout_train_command
 
 app:Final= typer.Typer()
+train_app: Final = typer.Typer(help="训练")
+
+train_app.command("layout", help="基于pp_layoutv2/v3预标注并训练版面检测模型")(
+    layout_train_command
+)
+app.add_typer(train_app, name="train")
 _DOCTOR_DEFAULT = "__ppx_default_doctor__"
 _AGENT_DEFAULT = "./agent.json"
 
