@@ -24,29 +24,26 @@ _models: dict[str, Any] = {
         "sha256": "c267cafe004067be73c44cc3aa7990f34e1026c467464372fa6843500f5da1c2",
         "verified": False,
     },
-
-    #TODO 这两个公式模型后续需要去掉
+    # TODO 这两个公式模型后续需要去掉
     "mfr": {"huggingface": "breezedeus/pix2text-mfr-1.5", "verified": False},
     "PP-FormulaNet_plus-M_infer": {
         "modelscope": "Memect/PP-FormulaNet_plus-M_infer",
         "verified": False,
     },
-    "PP-DocLayout-V2":{
-        "modelscope":"PaddlePaddle/PP-DocLayoutV2_onnx",
-        "verified":False
+    "PP-DocLayout-V3": {
+        "modelscope": "PaddlePaddle/PP-DocLayoutV3_onnx",
+        "verified": False,
+    },
+    "PP-DocLayout-V2": {
+        "modelscope": "PaddlePaddle/PP-DocLayoutV2_onnx",
+        "verified": False,
     },
     "PP-DocLayout-L": {
-        #"url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-DocLayout-L_infer.tar",
-        #"archive": "tar",
-        #"required_files": ["inference.onnx", "inference.yml"],
-        "modelscope":"Memect/PP-DocLayout-L",
+        "modelscope": "Memect/PP-DocLayout-L",
         "verified": False,
     },
     "PP-DocLayout_plus-L": {
-        #"url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-DocLayout_plus-L_infer.tar",
-        #"archive": "tar",
-        #"required_files": ["inference.onnx", "inference.yml"],
-        "modelscope":"Memect/PP-DocLayout_plus-L",
+        "modelscope": "Memect/PP-DocLayout_plus-L",
         "verified": False,
     },
     "PP-OCRv6_tiny_rec_onnx": {
@@ -177,7 +174,9 @@ def _find_model_dir(root: Path, required_files: list[str]) -> Path | None:
     if not required_files:
         return root
     for candidate in [root, *root.rglob("*")]:
-        if candidate.is_dir() and all(candidate.joinpath(file).is_file() for file in required_files):
+        if candidate.is_dir() and all(
+            candidate.joinpath(file).is_file() for file in required_files
+        ):
             return candidate
     return None
 
