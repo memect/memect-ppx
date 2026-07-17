@@ -173,12 +173,13 @@ def _detect_auto_engine(use_cuda: bool, use_dml: bool, use_cann: bool) -> str:
 
 def _default_model_path(version: LayoutVersion) -> Path:
     from memect.models import get_model_path
-    if version=='l':
-        return Path(get_model_path("PP-Doclayout-L")/"inference.onnx")
-    elif version=='plus_l':
-        return Path(get_model_path("PP-Doclayout_plus-L")/"inference.onnx")
+    if version == "l":
+        return Path(get_model_path("PP-DocLayout-L") / "inference.onnx")
+    elif version == "plus_l":
+        return Path(get_model_path("PP-DocLayout_plus-L") / "inference.onnx")
     else:
-        raise ValueError('')
+        raise ValueError(f"不支持的layout版本:{version}")
+
 
 def _create_detector(
     version: LayoutVersion,
@@ -623,6 +624,106 @@ def _resolve_python(python: Path | None, paddlex_root: Path) -> str:
     return str(path)
 
 
+def _paddlex_model_registration_status(
+    *,
+    python_cmd: str,
+    paddlex_root: Path,
+    model_name: str,
+) -> bool | None:
+    script = """
+import sys
+try:
+    import paddlex.repo_apis.PaddleDetection_api.object_det.register  # noqa: F401
+    from paddlex.repo_apis.base.register import get_registered_model_info
+    get_registered_model_info(sys.argv[1])
+except KeyError:
+    raise SystemExit(1)
+except Exception:
+    raise SystemExit(2)
+raise SystemExit(0)
+"""
+    try:
+        result = subprocess.run(
+            [python_cmd, "-c", script, model_name],
+            cwd=paddlex_root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=20,
+        )
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _paddlex_basic_config(paddlex_root: Path, model_name: str) -> Path:
+    return (
+        paddlex_root
+        / "paddlex"
+        / "repo_apis"
+        / "PaddleDetection_api"
+        / "configs"
+        / f"{model_name}.yaml"
+    )
+
+
+def _compatibility_overrides(
+    *,
+    python_cmd: str,
+    paddlex_root: Path,
+    model_name: str,
+) -> list[str]:
+    registration_status = _paddlex_model_registration_status(
+        python_cmd=python_cmd,
+        paddlex_root=paddlex_root,
+        model_name=model_name,
+    )
+    if registration_status is True:
+        return []
+    if registration_status is None:
+        return []
+
+    if model_name not in ("PP-DocLayout-L", "PP-DocLayout_plus-L"):
+        raise typer.BadParameter(
+            f"PaddleX当前环境未注册模型:{model_name}；"
+            "请升级PaddleX或通过--paddlex-model指定已注册模型"
+        )
+
+    basic_config = _paddlex_basic_config(paddlex_root, model_name)
+    if not basic_config.is_file():
+        raise typer.BadParameter(
+            f"PaddleX当前环境未注册模型:{model_name}，且找不到底层检测配置:{basic_config}；"
+            "请升级PaddleX到包含该PP-DocLayout配置的版本"
+        )
+
+    proxy_candidates = ["PP-DocLayout-L", "RT-DETR-L"]
+    for proxy_model in proxy_candidates:
+        if proxy_model == model_name:
+            continue
+        if _paddlex_model_registration_status(
+            python_cmd=python_cmd,
+            paddlex_root=paddlex_root,
+            model_name=proxy_model,
+        ) is True:
+            console.print(
+                f"PaddleX未注册{model_name}，使用{proxy_model}作为训练入口，"
+                f"并加载{basic_config.name}"
+            )
+            return [
+                f"Global.model={proxy_model}",
+                f"Train.basic_config_path={_config_arg(basic_config, paddlex_root)}",
+            ]
+
+    raise typer.BadParameter(
+        f"PaddleX当前环境未注册模型:{model_name}，且找不到可用的PP-DocLayout-L/RT-DETR-L代理模型；"
+        "请升级PaddleX"
+    )
+
+
 def _paddlex_command(
     *,
     python_cmd: str,
@@ -692,6 +793,12 @@ def _run_paddlex(
     model_name = paddlex_model or DEFAULT_PADDLEX_MODELS[version]
     config_path = _resolve_config(root, config=config, model_name=model_name)
     output_path = output_dir or paths["root"] / "output" / f"layout-{version}"
+    compatibility_overrides = _compatibility_overrides(
+        python_cmd=python_cmd,
+        paddlex_root=root,
+        model_name=model_name,
+    )
+    effective_overrides = [*compatibility_overrides, *(overrides or [])]
 
     if _is_predict_only_layout_config(config_path, model_name):
         raise typer.BadParameter(
@@ -711,7 +818,7 @@ def _run_paddlex(
             epochs=None,
             num_classes=None,
             dy2st=False,
-            overrides=overrides,
+            overrides=effective_overrides,
         )
         _run_subprocess(cmd, cwd=root, dry_run=dry_run)
 
@@ -727,7 +834,7 @@ def _run_paddlex(
             epochs=epochs,
             num_classes=num_classes,
             dy2st=dy2st,
-            overrides=overrides,
+            overrides=effective_overrides,
         )
         _run_subprocess(cmd, cwd=root, dry_run=dry_run)
 
@@ -878,7 +985,7 @@ def _run_layout(
 
 
 def layout(
-    version: Annotated[LayoutVersion, typer.Argument(help="预标注模型版本，可选v2或v3")],
+    version: Annotated[LayoutVersion, typer.Argument(help="预标注/训练模型版本，可选l或plus_l")],
     dir_: Annotated[Path, typer.Option("--dir","-d", help="数据集根目录")] = Path("."),
     init: Annotated[bool, typer.Option(help="只初始化目录和label.txt")] = False,
     prelabel: Annotated[bool, typer.Option(help="使用指定版本生成LabelMe预标注")] = False,
@@ -913,7 +1020,7 @@ def layout(
     skip_check: Annotated[bool, typer.Option(help="训练前跳过PaddleX数据校验")] = False,
     dry_run: Annotated[bool, typer.Option(help="只打印PaddleX命令，不执行")] = False,
 ) -> None:
-    """基于pp_layoutv2或pp_layoutv3预标注，并基于LabelMe标注训练版面检测模型。"""
+    """基于PP-DocLayout-L或PP-DocLayout_plus-L预标注，并基于LabelMe标注训练版面检测模型。"""
     _run_layout(
         version,
         dir_=dir_,
