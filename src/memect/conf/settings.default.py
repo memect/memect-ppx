@@ -322,6 +322,7 @@ settings: dict[str, Any] = {
                 "kwargs": {
                     # "model_path":get_model_path('./models/pp_layoutv2.onnx'),
                     #"model_path":get_model_path('./models/pp_layoutv3.onnx'),
+                    #v2,v3,l,plus_l
                     "version":"v2",
                     "score_threshold":0.5,
                     "engine": _layout_device["engine"],

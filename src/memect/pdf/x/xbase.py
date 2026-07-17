@@ -841,7 +841,9 @@ class XTable(XObject):
         else:
             #没有合并，直接使用objects[0]即可
             pass
-        
+
+        #跨页合并后，肯能为ybk+ybk，或者wbk+wbk，或者layout+layout，或者ybk+wbk混合？
+        data['subtype']=self.subtype
         return data
     
     @override

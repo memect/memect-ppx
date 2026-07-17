@@ -470,9 +470,13 @@ class LayoutModel(Model):
                 version = params.get("version")
                 if not model_path:
                     if version == "v2":
-                        model_path = get_model_path("pp_layoutv2.onnx")
+                        model_path = get_model_path("PP-DocLayout-V2") /"inference.onnx"
                     elif version == "v3":
-                        model_path = get_model_path("pp_layoutv3.onnx")
+                        model_path = get_model_path("PP-DocLayout-V3") /"inference.onnx"
+                    elif version == "l":
+                        model_path = get_model_path("PP-DocLayout-L") / "inference.onnx"
+                    elif version == "plus_l":
+                        model_path = get_model_path("PP-DocLayout_plus-L") / "inference.onnx"
                     elif version == "auto":
                         model_path = get_model_path("pp_layoutv3.onnx")
                     else:

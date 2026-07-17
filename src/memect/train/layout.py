@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from memect.base.utils import console
 
-LayoutVersion = Literal["v2", "v3"]
+LayoutVersion = Literal["l", "plus_l"]
 LayoutEngine = Literal["auto", "onnxruntime", "openvino"]
 
 IMAGE_SUFFIXES: Final = {
@@ -56,8 +56,8 @@ DEFAULT_LAYOUT_LABELS: Final = [
 ]
 
 DEFAULT_PADDLEX_MODELS: Final[dict[LayoutVersion, str]] = {
-    "v2": "PP-DocLayoutV2",
-    "v3": "PP-DocLayout-L",
+    "l": "PP-DocLayout-L",
+    "plus_l": "PP-DocLayout_plus-L",
 }
 
 
@@ -173,9 +173,12 @@ def _detect_auto_engine(use_cuda: bool, use_dml: bool, use_cann: bool) -> str:
 
 def _default_model_path(version: LayoutVersion) -> Path:
     from memect.models import get_model_path
-
-    return Path(get_model_path(f"pp_layout{version}.onnx"))
-
+    if version=='l':
+        return Path(get_model_path("PP-Doclayout-L")/"inference.onnx")
+    elif version=='plus_l':
+        return Path(get_model_path("PP-Doclayout_plus-L")/"inference.onnx")
+    else:
+        raise ValueError('')
 
 def _create_detector(
     version: LayoutVersion,
@@ -595,6 +598,12 @@ def _resolve_config(
     return path
 
 
+def _is_predict_only_layout_config(config: Path, model_name: str) -> bool:
+    if model_name == "PP-DocLayoutV2":
+        return True
+    return config.stem == "PP-DocLayoutV2"
+
+
 def _config_arg(path: Path, paddlex_root: Path) -> str:
     try:
         return path.relative_to(paddlex_root).as_posix()
@@ -624,6 +633,7 @@ def _paddlex_command(
     output_dir: Path | None,
     device: str | None,
     epochs: int | None,
+    num_classes: int | None,
     dy2st: bool,
     overrides: Sequence[str] | None,
 ) -> list[str]:
@@ -643,6 +653,8 @@ def _paddlex_command(
         cmd.extend(["-o", f"Global.device={device}"])
     if epochs is not None and mode == "train":
         cmd.extend(["-o", f"Train.epochs_iters={epochs}"])
+    if num_classes is not None and mode == "train":
+        cmd.extend(["-o", f"Train.num_classes={num_classes}"])
     if dy2st and mode == "train":
         cmd.extend(["-o", "Train.dy2st=True"])
     for override in overrides or []:
@@ -668,6 +680,7 @@ def _run_paddlex(
     output_dir: Path | None,
     device: str | None,
     epochs: int | None,
+    num_classes: int | None,
     dy2st: bool,
     overrides: Sequence[str] | None,
     dry_run: bool,
@@ -680,6 +693,12 @@ def _run_paddlex(
     config_path = _resolve_config(root, config=config, model_name=model_name)
     output_path = output_dir or paths["root"] / "output" / f"layout-{version}"
 
+    if _is_predict_only_layout_config(config_path, model_name):
+        raise typer.BadParameter(
+            "PP-DocLayoutV2 仅支持predict，不支持check_dataset/train；"
+            "请改用PP-DocLayout-L或其它可训练的layout_detection配置"
+        )
+
     if check_dataset:
         cmd = _paddlex_command(
             python_cmd=python_cmd,
@@ -690,6 +709,7 @@ def _run_paddlex(
             output_dir=output_path,
             device=device,
             epochs=None,
+            num_classes=None,
             dy2st=False,
             overrides=overrides,
         )
@@ -705,6 +725,7 @@ def _run_paddlex(
             output_dir=output_path,
             device=device,
             epochs=epochs,
+            num_classes=num_classes,
             dy2st=dy2st,
             overrides=overrides,
         )
@@ -804,6 +825,7 @@ def _run_layout(
             dry_run=dry_run,
             check_dataset=check or (train and not skip_check),
             train=train,
+            num_classes=stats["categories"] if (prepare or check or train) else None,
         )
 
     if has_action:
@@ -846,6 +868,7 @@ def _run_layout(
         output_dir=output_dir,
         device=device,
         epochs=epochs,
+        num_classes=stats["categories"],
         dy2st=dy2st,
         overrides=overrides,
         dry_run=dry_run,

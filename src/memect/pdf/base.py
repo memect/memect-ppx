@@ -3164,6 +3164,8 @@ class KTable(KObject):
             "col_num": self.col_num,
             "cells": [c.jsonify() for c in self.cells],
         }
+        #ybk|wbk|layout
+        data['subtype']=self.subtype
         return data
 
     def markdown(self) -> str:

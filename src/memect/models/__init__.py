@@ -1,6 +1,9 @@
 import hashlib
 import logging
+import shutil
+import tarfile
 import threading
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Any, Final
 
@@ -28,14 +31,22 @@ _models: dict[str, Any] = {
         "modelscope": "Memect/PP-FormulaNet_plus-M_infer",
         "verified": False,
     },
-    "pp_layoutv2.onnx": {
-        "url": "https://www.modelscope.cn/models/RapidAI/RapidLayout/resolve/v1.2.0/onnx/pp_doc_layout/pp_doc_layoutv2.onnx",
-        "sha256": "0bd2ea0997fe0789f0300292291f8bbf897d890b44a9a3bd5be72afd6198aa90",
+    "PP-DocLayout-V2":{
+        "modelscope":"PaddlePaddle/PP-DocLayoutV2_onnx",
+        "verified":False
+    },
+    "PP-DocLayout-L": {
+        #"url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-DocLayout-L_infer.tar",
+        #"archive": "tar",
+        #"required_files": ["inference.onnx", "inference.yml"],
+        "modelscope":"Memect/PP-DocLayout-L",
         "verified": False,
     },
-    "pp_layoutv3.onnx": {
-        "url": "https://www.modelscope.cn/models/RapidAI/RapidLayout/resolve/v1.2.0/onnx/pp_doc_layout/pp_doc_layoutv3.onnx",
-        "sha256": "250dbad1dfb9e4983fab75e1bf5085cd56ec3f41d5c7d0f8623ec74856e7aa67",
+    "PP-DocLayout_plus-L": {
+        #"url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-DocLayout_plus-L_infer.tar",
+        #"archive": "tar",
+        #"required_files": ["inference.onnx", "inference.yml"],
+        "modelscope":"Memect/PP-DocLayout_plus-L",
         "verified": False,
     },
     "PP-OCRv6_tiny_rec_onnx": {
@@ -70,6 +81,12 @@ def get_model_path(name: str):
     path = Path(__file__).parent.joinpath(name)
     cfg = _models[name]
 
+    def has_required_files(directory: Path) -> bool:
+        required = cfg.get("required_files")
+        if not required:
+            return False
+        return all(directory.joinpath(file).is_file() for file in required)
+
     def check_model():
         if cfg["verified"]:
             return True
@@ -83,10 +100,11 @@ def get_model_path(name: str):
             else:
                 logger.warning("模型已经存在但是不完整:%s", name)
                 return False
-        elif path.is_dir() and path.joinpath("_done.txt").is_file():
-            logger.info("模型已经存在:%s", name)
-            cfg["verified"] = True
-            return True
+        elif path.is_dir():
+            if path.joinpath("_done.txt").is_file() or has_required_files(path):
+                logger.info("模型已经存在:%s", name)
+                cfg["verified"] = True
+                return True
 
         return False
 
@@ -119,6 +137,10 @@ def get_model_path(name: str):
             snapshot_download(cfg.get("huggingface"), local_dir=path, endpoint=endpoint)
             path.joinpath("_done.txt").write_text("ok")
             cfg["verified"] = True
+        elif cfg.get("archive") == "tar":
+            download_and_extract_tar(cfg["url"], path, cfg.get("required_files", []))
+            path.joinpath("_done.txt").write_text("ok")
+            cfg["verified"] = True
         else:
             download(cfg["url"], path)
             hash = hashlib.sha256(path.read_bytes()).digest().hex()
@@ -127,6 +149,37 @@ def get_model_path(name: str):
                 raise RuntimeError("下载的模型不完整")
             cfg["verified"] = True
         return path
+
+
+def download_and_extract_tar(url: str, path: Path, required_files: list[str]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=path.parent) as temp_dir:
+        temp_path = Path(temp_dir)
+        archive_path = temp_path / "model.tar"
+        extract_path = temp_path / "extract"
+        extract_path.mkdir()
+        download(url, archive_path)
+        with tarfile.open(archive_path) as tar:
+            for member in tar.getmembers():
+                target = extract_path / member.name
+                if not target.resolve().is_relative_to(extract_path.resolve()):
+                    raise RuntimeError(f"tar contains unsafe path: {member.name}")
+            tar.extractall(extract_path)
+
+        source = _find_model_dir(extract_path, required_files)
+        if source is None:
+            raise RuntimeError("下载的模型包不包含所需文件")
+        path.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, path, dirs_exist_ok=True)
+
+
+def _find_model_dir(root: Path, required_files: list[str]) -> Path | None:
+    if not required_files:
+        return root
+    for candidate in [root, *root.rglob("*")]:
+        if candidate.is_dir() and all(candidate.joinpath(file).is_file() for file in required_files):
+            return candidate
+    return None
 
 
 def get_ocr_path(model: str, size: str):
@@ -163,8 +216,10 @@ def download_ocr():
 
 
 def download_layout():
-    get_model_path("pp_layoutv2.onnx")
-    get_model_path("pp_layoutv3.onnx")
+    get_model_path("PP-DocLayout-V2")
+    get_model_path("PP-DocLayout-V3")
+    get_model_path("PP-DocLayout-L")
+    get_model_path("PP-DocLayout_plus-L")
 
 
 def download_table():

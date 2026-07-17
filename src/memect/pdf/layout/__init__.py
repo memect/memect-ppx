@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any, Final, Literal, Mapping, NotRequired, Sequence, TypedDic
 
 import cv2
 import numpy as np
+import yaml
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
@@ -18,6 +20,8 @@ PP_DOC_LAYOUT_V3_URL = (
     "https://www.modelscope.cn/models/RapidAI/RapidLayout/resolve/v1.2.0/"
     "onnx/pp_doc_layout/pp_doc_layoutv3.onnx"
 )
+PP_DOC_LAYOUT_L_MODEL_DIR = "PP-DocLayout-L"
+PP_DOC_LAYOUT_PLUS_L_MODEL_DIR = "PP-DocLayout_plus-L"
 
 PP_DOC_LAYOUT_LABELS = [
     "abstract",
@@ -48,7 +52,7 @@ PP_DOC_LAYOUT_LABELS = [
 ]
 
 ImageInput = str | Path | bytes | Image.Image | np.ndarray
-LayoutVersion = Literal["auto", "v2", "v3"]
+LayoutVersion = Literal["auto", "v2", "v3", "l", "plus_l"]
 EngineType = Literal["onnxruntime", "openvino"]
 LayoutShapeMode = Literal["rect", "quad", "poly", "auto"]
 
@@ -64,6 +68,7 @@ class LayoutObject(TypedDict):
 class LayoutResult(TypedDict):
     width: int
     height: int
+    version: NotRequired[LayoutVersion]
     objects: list[LayoutObject]
 
 
@@ -75,6 +80,24 @@ class _PreprocessedImage:
     scale_factor: np.ndarray
     width: int
     height: int
+
+
+@dataclass(frozen=True)
+class _LayoutPreprocessConfig:
+    input_size: tuple[int, int] = (800, 800)
+    use_rgb: bool = False
+    scale: float = 1.0 / 255.0
+    mean: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    std: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    interpolation: int = cv2.INTER_CUBIC
+    keep_ratio: bool = False
+
+
+@dataclass(frozen=True)
+class _ResolvedModel:
+    model_path: Path
+    config_path: Path | None
+    config: Mapping[str, Any]
 
 
 def _load_image_bgr(image: ImageInput) -> np.ndarray:
@@ -122,13 +145,199 @@ def _ndarray_to_bgr(image: np.ndarray) -> np.ndarray:
     raise ValueError(f"unsupported image channels: {channels}")
 
 
-def _preprocess(image: ImageInput, input_size: tuple[int, int]) -> _PreprocessedImage:
+def _find_first_file(directory: Path, *patterns: str) -> Path | None:
+    for pattern in patterns:
+        exact = directory / pattern
+        if exact.is_file():
+            return exact
+        matches = sorted(directory.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _load_config(path: Path | None) -> Mapping[str, Any]:
+    if path is None:
+        return {}
+    data = yaml.safe_load(path.read_text("utf-8")) or {}
+    if not isinstance(data, MappingABC):
+        return {}
+    return data
+
+
+def _resolve_model(model_path: str | Path) -> _ResolvedModel:
+    path = Path(model_path)
+    if path.is_dir():
+        resolved_model = _find_first_file(path, "inference.onnx", "*.onnx")
+        if resolved_model is None:
+            raise FileNotFoundError(f"model directory does not contain an ONNX file: {path}")
+        config_path = _find_first_file(path, "inference.yml", "inference.yaml", "*.yml", "*.yaml")
+        return _ResolvedModel(
+            model_path=resolved_model,
+            config_path=config_path,
+            config=_load_config(config_path),
+        )
+    if not path.is_file():
+        raise FileNotFoundError(f"model not found: {path}")
+
+    config_path = _find_first_file(
+        path.parent,
+        f"{path.stem}.yml",
+        f"{path.stem}.yaml",
+        "inference.yml",
+        "inference.yaml",
+        "*.yml",
+        "*.yaml",
+    )
+    return _ResolvedModel(
+        model_path=path,
+        config_path=config_path,
+        config=_load_config(config_path),
+    )
+
+
+def _version_from_name(name: str | None) -> LayoutVersion | None:
+    if not name:
+        return None
+    value = name.lower().replace("_", "-")
+    if value in (
+        "v2",
+        "pp-doclayoutv2",
+        "pp-doclayout-v2",
+        "pp-doc-layout-v2",
+        "pp-layoutv2",
+        "pp-layout-v2",
+    ):
+        return "v2"
+    if value in (
+        "v3",
+        "pp-doclayoutv3",
+        "pp-doclayout-v3",
+        "pp-doc-layout-v3",
+        "pp-layoutv3",
+        "pp-layout-v3",
+    ):
+        return "v3"
+    if value in ("l", "pp-doclayout-l", "pp-doc-layout-l"):
+        return "l"
+    if value in (
+        "plus-l",
+        "pp-doclayout-plus-l",
+        "pp-doc-layout-plus-l",
+    ):
+        return "plus_l"
+    return None
+
+
+def _version_from_config(config: Mapping[str, Any]) -> LayoutVersion | None:
+    global_cfg = config.get("Global")
+    if isinstance(global_cfg, MappingABC):
+        version = _version_from_name(str(global_cfg.get("model_name", "")))
+        if version is not None:
+            return version
+    return _version_from_name(str(config.get("model_name", "")))
+
+
+def _version_from_path(path: Path) -> LayoutVersion | None:
+    for part in (path.name, path.stem, path.parent.name):
+        version = _version_from_name(part)
+        if version is not None:
+            return version
+    return None
+
+
+def _normalize_tuple3(values: Any, default: tuple[float, float, float]) -> tuple[float, float, float]:
+    if isinstance(values, SequenceABC) and not isinstance(values, (str, bytes)) and len(values) == 3:
+        return (float(values[0]), float(values[1]), float(values[2]))
+    return default
+
+
+def _preprocess_config_from_model(
+    config: Mapping[str, Any],
+    version: LayoutVersion,
+) -> _LayoutPreprocessConfig:
+    input_size = (640, 640) if version == "l" else (800, 800)
+    use_rgb = version in ("l", "plus_l")
+    scale = 1.0 / 255.0
+    mean = (0.0, 0.0, 0.0)
+    std = (1.0, 1.0, 1.0)
+    interpolation = cv2.INTER_CUBIC
+    keep_ratio = False
+
+    if not config:
+        return _LayoutPreprocessConfig(input_size=input_size, use_rgb=use_rgb)
+
+    preprocess = config.get("Preprocess")
+    if isinstance(preprocess, SequenceABC) and not isinstance(preprocess, (str, bytes)):
+        for op in preprocess:
+            if not isinstance(op, MappingABC):
+                continue
+            op_type = str(op.get("type", ""))
+            if op_type == "Resize":
+                target_size = op.get("target_size")
+                if (
+                    isinstance(target_size, SequenceABC)
+                    and not isinstance(target_size, (str, bytes))
+                    and len(target_size) == 2
+                ):
+                    input_size = (int(target_size[0]), int(target_size[1]))
+                keep_ratio = bool(op.get("keep_ratio", False))
+                interp = op.get("interp", 2)
+                if isinstance(interp, int):
+                    interpolation = {
+                        0: cv2.INTER_NEAREST,
+                        1: cv2.INTER_LINEAR,
+                        2: cv2.INTER_CUBIC,
+                        3: cv2.INTER_AREA,
+                        4: cv2.INTER_LANCZOS4,
+                    }.get(interp, cv2.INTER_CUBIC)
+            elif op_type == "NormalizeImage":
+                is_scale = bool(op.get("is_scale", True))
+                scale = 1.0 / 255.0 if is_scale else 1.0
+                norm_type = op.get("norm_type")
+                if norm_type and norm_type != "none" and norm_type != "mean_std":
+                    mean = (0.0, 0.0, 0.0)
+                    std = (1.0, 1.0, 1.0)
+                else:
+                    mean = _normalize_tuple3(op.get("mean"), mean)
+                    std = _normalize_tuple3(op.get("std"), std)
+
+    return _LayoutPreprocessConfig(
+        input_size=input_size,
+        use_rgb=use_rgb,
+        scale=scale,
+        mean=mean,
+        std=std,
+        interpolation=interpolation,
+        keep_ratio=keep_ratio,
+    )
+
+
+def _preprocess(image: ImageInput, config: _LayoutPreprocessConfig) -> _PreprocessedImage:
     bgr = _load_image_bgr(image)
     height, width = bgr.shape[:2]
-    input_h, input_w = input_size
+    input_h, input_w = config.input_size
 
-    resized = cv2.resize(bgr, (input_w, input_h), interpolation=cv2.INTER_CUBIC)
-    tensor = (resized.astype(np.float32) / 255.0).transpose(2, 0, 1)[None, ...]
+    source = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB) if config.use_rgb else bgr
+
+    if config.keep_ratio:
+        img_size = (width, height)
+        target_size = (input_w, input_h)
+        scale_ratio = min(
+            max(target_size) / max(img_size),
+            min(target_size) / min(img_size),
+        )
+        resized_w = max(1, int(round(width * scale_ratio)))
+        resized_h = max(1, int(round(height * scale_ratio)))
+        resized = cv2.resize(source, (resized_w, resized_h), interpolation=config.interpolation)
+        input_h, input_w = resized_h, resized_w
+    else:
+        resized = cv2.resize(source, (input_w, input_h), interpolation=config.interpolation)
+
+    tensor = resized.astype(np.float32) * config.scale
+    mean = np.asarray(config.mean, dtype=np.float32).reshape(1, 1, 3)
+    std = np.asarray(config.std, dtype=np.float32).reshape(1, 1, 3)
+    tensor = ((tensor - mean) / std).transpose(2, 0, 1)[None, ...]
     im_shape = np.array([[input_h, input_w]], dtype=np.float32)
     scale_factor = np.array(
         [[input_h / float(height), input_w / float(width)]],
@@ -179,8 +388,13 @@ def _labels_from_metadata(metadata: dict[str, str] | None) -> list[str] | None:
 
 
 def _normalize_version(version: str) -> LayoutVersion:
-    value = version.lower()
-    if value in ("auto", "v2", "v3"):
+    value = version.lower().replace("_", "-")
+    if value == "auto":
+        return "auto"
+    normalized = _version_from_name(value)
+    if normalized is not None:
+        return normalized
+    if value in ("v2", "v3"):
         return value  # type: ignore[return-value]
     raise ValueError(f"unsupported layout version: {version}")
 
@@ -237,6 +451,8 @@ def _detect_version(outputs: Sequence[np.ndarray]) -> LayoutVersion:
         return "v2"
     if boxes.shape[-1] == 7:
         return "v3"
+    if boxes.shape[-1] == 6:
+        return "auto"
     return "auto"
 
 
@@ -608,13 +824,33 @@ class _PPDocLayoutBase:
         filter_large_image: bool = True,
         filter_overlap_boxes: bool = True,
     ):
-        self.model_path = Path(model_path)
-        if not self.model_path.is_file():
-            raise FileNotFoundError(f"model not found: {self.model_path}")
+        resolved_model = _resolve_model(model_path)
+        self.model_path = resolved_model.model_path
+        self.config_path = resolved_model.config_path
+        self.config = resolved_model.config
 
-        self.version = _normalize_version(version)
+        requested_version = _normalize_version(version)
+        config_version = _version_from_config(self.config)
+        path_version = _version_from_path(self.model_path)
+        self.version = requested_version
+        if self.version == "auto":
+            self.version = config_version or path_version or "auto"
+        elif config_version is not None and config_version != self.version:
+            raise ValueError(
+                f"model config looks like {config_version}, but version={self.version}"
+            )
+
         self.score_threshold = float(score_threshold)
-        self.labels = list(labels or PP_DOC_LAYOUT_LABELS)
+        config_labels = self.config.get("label_list")
+        self._labels_from_config = False
+        if labels is not None:
+            self.labels = list(labels)
+        elif isinstance(config_labels, SequenceABC) and not isinstance(config_labels, (str, bytes)):
+            self.labels = [str(label) for label in config_labels]
+            self._labels_from_config = True
+        else:
+            self.labels = list(PP_DOC_LAYOUT_LABELS)
+        self.preprocess_config = _preprocess_config_from_model(self.config, self.version)
         self.layout_nms = layout_nms
         self.use_masks = use_masks
         self.layout_shape_mode = layout_shape_mode
@@ -625,11 +861,11 @@ class _PPDocLayoutBase:
         return self.predict(image, debug=debug)
 
     def predict(self, image: ImageInput, *, debug: bool = False) -> LayoutResult:
-        data = _preprocess(image, self._INPUT_SIZE)
+        data = _preprocess(image, self.preprocess_config)
         feed = _build_input_feed(self.input_names, data)
         outputs = [np.asarray(output) for output in self._run(feed)]
         result = self._postprocess(outputs, data.width, data.height)
-        result["version"]=self.version
+        result["version"] = self.version
         if debug:
             _show_debug_result(data.original, result)
         return result
@@ -646,7 +882,7 @@ class _PPDocLayoutBase:
         raise NotImplementedError
 
     def _set_labels_from_metadata(self, metadata: dict[str, str] | None, explicit_labels: bool) -> None:
-        if explicit_labels:
+        if explicit_labels or self._labels_from_config:
             return
         labels = _labels_from_metadata(metadata)
         if labels:
@@ -655,7 +891,13 @@ class _PPDocLayoutBase:
     def _validate_version(self, outputs: Sequence[np.ndarray]) -> None:
         detected = _detect_version(outputs)
         if self.version == "auto":
+            if detected == "auto":
+                raise ValueError(
+                    "cannot detect layout model version from output; pass "
+                    "version='l' or version='plus_l', or keep inference.yml next to the model"
+                )
             self.version = detected
+            self.preprocess_config = _preprocess_config_from_model(self.config, self.version)
             return
         if detected != "auto" and detected != self.version:
             raise ValueError(
@@ -1009,13 +1251,67 @@ _paddle_layout_v2:Final = {
 
 _paddle_layout_v3:Final = _paddle_layout_v2
 
-def get_mapping(version:str)->Mapping[str,str]:
-    if version=='v2':
+_paddle_layout_l: Final = {
+    "paragraph_title": "title",
+    "image": "figure",
+    "text": "text",
+    "number": "footer",
+    "abstract": "text",
+    "content": "toc",
+    "figure_title": "figure",
+    "formula": "formula",
+    "table": "table",
+    "table_title": "title",
+    "reference": "text",
+    "doc_title": "title",
+    "footnote": "footnote",
+    "header": "header",
+    "algorithm": "code",
+    "footer": "footer",
+    "seal": "seal",
+    "chart_title": "title",
+    "chart": "chart",
+    "formula_number": "text",
+    "header_image": "figure",
+    "footer_image": "figure",
+    "aside_text": "other_text",
+}
+_paddle_layout_plus_l: Final = {
+    "paragraph_title": "text",
+    "image": "figure",
+    "text": "text",
+    "number": "footer",
+    "abstract": "text",
+    "content": "toc",
+    "figure_title": "title",
+    "formula": "formula",
+    "table": "table",
+    "reference": "text",
+    "doc_title": "title",
+    "footnote": "footnote",
+    "header": "header",
+    "algorithm": "code",
+    "footer": "footer",
+    "seal": "seal",
+    "chart": "chart",
+    "formula_number": "text",
+    "aside_text": "other_text",
+    "reference_content": "text",
+}
+
+
+def get_mapping(version: str) -> Mapping[str, str]:
+    normalized = _normalize_version(version)
+    if normalized == "v2":
         return _paddle_layout_v2
-    elif version=='v3':
+    elif normalized == "v3":
         return _paddle_layout_v3
+    elif normalized == "l":
+        return _paddle_layout_l
+    elif normalized == "plus_l":
+        return _paddle_layout_plus_l
     else:
-        raise ValueError(f'不支持的版本:{version}')
+        raise ValueError(f"不支持的版本:{version}")
 
 __all__ = [
     "EngineType",
