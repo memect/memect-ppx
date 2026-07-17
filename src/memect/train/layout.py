@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from memect.base.utils import console
 
-LayoutVersion = Literal["l", "plus_l"]
+LayoutVersion = Literal["v2", "v3", "l", "plus_l"]
 LayoutEngine = Literal["auto", "onnxruntime", "openvino"]
 
 IMAGE_SUFFIXES: Final = {
@@ -27,7 +27,7 @@ IMAGE_SUFFIXES: Final = {
     ".webp",
 }
 
-DEFAULT_LAYOUT_LABELS: Final = [
+LAYOUT_V2_LABELS: Final = (
     "abstract",
     "algorithm",
     "aside_text",
@@ -53,9 +53,69 @@ DEFAULT_LAYOUT_LABELS: Final = [
     "text",
     "vertical_text",
     "vision_footnote",
-]
+)
+
+LAYOUT_V3_LABELS: Final = LAYOUT_V2_LABELS
+
+LAYOUT_L_LABELS: Final = (
+    "paragraph_title",
+    "image",
+    "text",
+    "number",
+    "abstract",
+    "content",
+    "figure_title",
+    "formula",
+    "table",
+    "table_title",
+    "reference",
+    "doc_title",
+    "footnote",
+    "header",
+    "algorithm",
+    "footer",
+    "seal",
+    "chart_title",
+    "chart",
+    "formula_number",
+    "header_image",
+    "footer_image",
+    "aside_text",
+)
+
+LAYOUT_PLUS_L_LABELS: Final = (
+    "paragraph_title",
+    "image",
+    "text",
+    "number",
+    "abstract",
+    "content",
+    "figure_title",
+    "formula",
+    "table",
+    "reference",
+    "doc_title",
+    "footnote",
+    "header",
+    "algorithm",
+    "footer",
+    "seal",
+    "chart",
+    "formula_number",
+    "aside_text",
+    "reference_content",
+)
+
+DEFAULT_LAYOUT_LABELS_BY_VERSION: Final[dict[LayoutVersion, tuple[str, ...]]] = {
+    "v2": LAYOUT_V2_LABELS,
+    "v3": LAYOUT_V3_LABELS,
+    "l": LAYOUT_L_LABELS,
+    "plus_l": LAYOUT_PLUS_L_LABELS,
+}
 
 DEFAULT_PADDLEX_MODELS: Final[dict[LayoutVersion, str]] = {
+    "v2": "PP-DocLayoutV2",
+    "v3": "PP-DocLayoutV3",
     "l": "PP-DocLayout-L",
     "plus_l": "PP-DocLayout_plus-L",
 }
@@ -80,9 +140,16 @@ def _dataset_paths(
     }
 
 
-def _read_labels(path: Path) -> list[str]:
+def _default_labels(version: LayoutVersion) -> list[str]:
+    try:
+        return list(DEFAULT_LAYOUT_LABELS_BY_VERSION[version])
+    except KeyError:
+        raise ValueError(f"不支持的layout版本:{version}") from None
+
+
+def _read_labels(path: Path, *, default_labels: Sequence[str]) -> list[str]:
     if not path.is_file():
-        return list(DEFAULT_LAYOUT_LABELS)
+        return list(default_labels)
     labels = [line.strip() for line in path.read_text("utf-8").splitlines()]
     return [label for label in labels if label and not label.startswith("#")]
 
@@ -116,14 +183,38 @@ def _labelme_files(labelme_dir: Path) -> list[Path]:
     )
 
 
-def _ensure_dataset_dirs(paths: dict[str, Path]) -> None:
+def _builtin_label_version(labels: Sequence[str]) -> LayoutVersion | None:
+    label_list = list(labels)
+    for version, default_labels in DEFAULT_LAYOUT_LABELS_BY_VERSION.items():
+        if label_list == list(default_labels):
+            return version
+    return None
+
+
+def _ensure_dataset_dirs(paths: dict[str, Path], *, version: LayoutVersion) -> None:
     paths["root"].mkdir(parents=True, exist_ok=True)
     paths["images"].mkdir(parents=True, exist_ok=True)
     paths["labelme"].mkdir(parents=True, exist_ok=True)
     paths["annotations"].mkdir(parents=True, exist_ok=True)
     paths["previews"].mkdir(parents=True, exist_ok=True)
+    default_labels = _default_labels(version)
     if not paths["labels"].exists():
-        _write_labels(paths["labels"], DEFAULT_LAYOUT_LABELS)
+        _write_labels(paths["labels"], default_labels)
+        return
+
+    labels = _read_labels(paths["labels"], default_labels=default_labels)
+    if labels == default_labels:
+        return
+    if not labels:
+        _write_labels(paths["labels"], default_labels)
+        return
+
+    builtin_version = _builtin_label_version(labels)
+    if builtin_version is not None:
+        _write_labels(paths["labels"], default_labels)
+        console.print(
+            f"label.txt使用{builtin_version}默认标签，已切换为{version}默认标签"
+        )
 
 
 def _labelme_args(paths: dict[str, Path]) -> str:
@@ -148,8 +239,8 @@ def _print_labelme_commands(paths: dict[str, Path]) -> None:
     console.print(f"stable labelme command: {_stable_labelme_command(paths)}")
 
 
-def _init_dataset(paths: dict[str, Path]) -> None:
-    _ensure_dataset_dirs(paths)
+def _init_dataset(paths: dict[str, Path], *, version: LayoutVersion) -> None:
+    _ensure_dataset_dirs(paths, version=version)
     console.print(f"dataset: {paths['root']}")
     console.print(f"images: {paths['images']}")
     console.print(f"labelme: {paths['labelme']}")
@@ -173,7 +264,11 @@ def _detect_auto_engine(use_cuda: bool, use_dml: bool, use_cann: bool) -> str:
 
 def _default_model_path(version: LayoutVersion) -> Path:
     from memect.models import get_model_path
-    if version == "l":
+    if version == "v2":
+        return Path(get_model_path("PP-DocLayout-V2") / "inference.onnx")
+    elif version == "v3":
+        return Path(get_model_path("PP-DocLayout-V3") / "inference.onnx")
+    elif version == "l":
         return Path(get_model_path("PP-DocLayout-L") / "inference.onnx")
     elif version == "plus_l":
         return Path(get_model_path("PP-DocLayout_plus-L") / "inference.onnx")
@@ -296,12 +391,12 @@ def _prelabel_dataset(
     overwrite: bool,
     preview: bool,
 ) -> dict[str, int]:
-    _ensure_dataset_dirs(paths)
+    _ensure_dataset_dirs(paths, version=version)
     images = _image_files(paths["images"])
     if not images:
         raise typer.BadParameter(f"images目录下没有图片: {paths['images']}")
 
-    labels = _read_labels(paths["labels"])
+    labels = _read_labels(paths["labels"], default_labels=_default_labels(version))
     detector = _create_detector(
         version,
         model_path=model_path,
@@ -503,15 +598,17 @@ def _write_coco(path: Path, data: dict[str, Any]) -> None:
 def _convert_labelme_to_coco(
     paths: dict[str, Path],
     *,
+    version: LayoutVersion,
     val_ratio: float,
     seed: int,
     append_labels: bool,
 ) -> dict[str, Any]:
+    _ensure_dataset_dirs(paths, version=version)
     labelme_files = _labelme_files(paths["labelme"])
     if not labelme_files:
         raise typer.BadParameter(f"没有找到LabelMe标注: {paths['labelme']}")
 
-    labels = _read_labels(paths["labels"])
+    labels = _read_labels(paths["labels"], default_labels=_default_labels(version))
     train_items, val_items = _split_items(labelme_files, val_ratio, seed)
     train_coco, train_labels, train_stats = _build_coco(
         train_items,
@@ -530,7 +627,10 @@ def _convert_labelme_to_coco(
         if label not in labels:
             labels.append(label)
 
-    if labels != _read_labels(paths["labels"]):
+    if labels != _read_labels(
+        paths["labels"],
+        default_labels=_default_labels(version),
+    ):
         _write_labels(paths["labels"], labels)
         train_coco, _, train_stats = _build_coco(
             train_items,
@@ -926,7 +1026,7 @@ def _run_layout(
     has_action = init or prelabel or prepare or check or train
 
     if init:
-        _init_dataset(paths)
+        _init_dataset(paths, version=version)
 
     if prelabel:
         stats = _prelabel_dataset(
@@ -947,6 +1047,7 @@ def _run_layout(
     if prepare or check or train:
         stats = _convert_labelme_to_coco(
             paths,
+            version=version,
             val_ratio=val_ratio,
             seed=seed,
             append_labels=append_labels,
@@ -977,7 +1078,7 @@ def _run_layout(
     if has_action:
         return
 
-    _init_dataset(paths)
+    _init_dataset(paths, version=version)
     if not _labelme_files(paths["labelme"]):
         stats = _prelabel_dataset(
             version,
@@ -998,6 +1099,7 @@ def _run_layout(
 
     stats = _convert_labelme_to_coco(
         paths,
+        version=version,
         val_ratio=val_ratio,
         seed=seed,
         append_labels=append_labels,
@@ -1024,7 +1126,7 @@ def _run_layout(
 
 
 def layout(
-    version: Annotated[LayoutVersion, typer.Argument(help="预标注/训练模型版本，可选l或plus_l")],
+    version: Annotated[LayoutVersion, typer.Argument(help="预标注/训练模型版本，可选v2、v3、l或plus_l")],
     dir_: Annotated[Path, typer.Option("--dir","-d", help="数据集根目录")] = Path("."),
     init: Annotated[bool, typer.Option(help="只初始化目录和label.txt")] = False,
     prelabel: Annotated[bool, typer.Option(help="使用指定版本生成LabelMe预标注")] = False,
@@ -1059,7 +1161,7 @@ def layout(
     skip_check: Annotated[bool, typer.Option(help="训练前跳过PaddleX数据校验")] = False,
     dry_run: Annotated[bool, typer.Option(help="只打印PaddleX命令，不执行")] = False,
 ) -> None:
-    """基于PP-DocLayout-L或PP-DocLayout_plus-L预标注，并基于LabelMe标注训练版面检测模型。"""
+    """基于PP-DocLayout预标注，并基于LabelMe标注训练版面检测模型。"""
     _run_layout(
         version,
         dir_=dir_,

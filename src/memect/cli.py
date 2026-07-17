@@ -16,7 +16,7 @@ from .train.layout import layout as layout_train_command
 app:Final= typer.Typer()
 train_app: Final = typer.Typer(help="训练")
 
-train_app.command("layout", help="基于pp_layoutv2/v3预标注并训练版面检测模型")(
+train_app.command("layout", help="基于PP-DocLayout预标注并训练版面检测模型")(
     layout_train_command
 )
 app.add_typer(train_app, name="train")

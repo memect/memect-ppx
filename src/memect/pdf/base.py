@@ -3777,6 +3777,13 @@ class KCell:
             obj["bbox"] = self.bbox.jsonify()
         if self.objects:
             obj["objects"] = [obj.jsonify() for obj in self.objects]
+        
+        if self.color and not self.color.is_white():
+            obj['bg_color']=self.color.jsonify()
+        else:
+            #如果为白色，就不需要输出了
+            pass
+        
         return obj
 
 
