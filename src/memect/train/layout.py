@@ -624,6 +624,40 @@ def _resolve_python(python: Path | None, paddlex_root: Path) -> str:
     return str(path)
 
 
+def _resolve_paddlex_device(
+    *,
+    device: str | None,
+    python_cmd: str,
+    paddlex_root: Path,
+) -> str:
+    if device:
+        return device
+
+    script = """
+try:
+    from paddlex.utils.device import get_default_device
+    print(get_default_device())
+except Exception:
+    raise SystemExit(1)
+"""
+    try:
+        result = subprocess.run(
+            [python_cmd, "-c", script],
+            cwd=paddlex_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+    except Exception:
+        return "cpu"
+    if result.returncode != 0:
+        return "cpu"
+    resolved = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    return resolved or "cpu"
+
+
 def _paddlex_model_registration_status(
     *,
     python_cmd: str,
@@ -793,6 +827,11 @@ def _run_paddlex(
     model_name = paddlex_model or DEFAULT_PADDLEX_MODELS[version]
     config_path = _resolve_config(root, config=config, model_name=model_name)
     output_path = output_dir or paths["root"] / "output" / f"layout-{version}"
+    resolved_device = _resolve_paddlex_device(
+        device=device,
+        python_cmd=python_cmd,
+        paddlex_root=root,
+    )
     compatibility_overrides = _compatibility_overrides(
         python_cmd=python_cmd,
         paddlex_root=root,
@@ -814,7 +853,7 @@ def _run_paddlex(
             mode="check_dataset",
             dataset_dir=paths["root"],
             output_dir=output_path,
-            device=device,
+            device=resolved_device,
             epochs=None,
             num_classes=None,
             dy2st=False,
@@ -830,7 +869,7 @@ def _run_paddlex(
             mode="train",
             dataset_dir=paths["root"],
             output_dir=output_path,
-            device=device,
+            device=resolved_device,
             epochs=epochs,
             num_classes=num_classes,
             dy2st=dy2st,
