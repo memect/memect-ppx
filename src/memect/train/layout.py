@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import random
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -119,6 +120,14 @@ DEFAULT_PADDLEX_MODELS: Final[dict[LayoutVersion, str]] = {
     "l": "PP-DocLayout-L",
     "plus_l": "PP-DocLayout_plus-L",
 }
+DEFAULT_LABELME_NAME: Final = "labelme-{version}"
+DEFAULT_ANNOTATIONS_NAME: Final = "annotations-{version}"
+DEFAULT_PREVIEWS_NAME: Final = "previews-{version}"
+DEFAULT_LABELS_NAME: Final = "label-{version}.txt"
+LEGACY_LABELME_NAME: Final = "labelme_{version}"
+LEGACY_ANNOTATIONS_NAME: Final = "annotations_{version}"
+LEGACY_PREVIEWS_NAME: Final = "previews_{version}"
+LEGACY_LABELS_NAME: Final = "label_{version}.txt"
 
 
 def _dataset_paths(
@@ -134,10 +143,34 @@ def _dataset_paths(
     return {
         "root": root,
         "images": root / _versioned_name(images_name, version=version),
-        "labelme": root / _versioned_name(labelme_name, version=version),
-        "annotations": root / _versioned_name(annotations_name, version=version),
-        "previews": root / _versioned_name(previews_name, version=version),
-        "labels": root / _versioned_name(labels_name, version=version),
+        "labelme": _resolve_versioned_path(
+            root,
+            labelme_name,
+            version=version,
+            default_name=DEFAULT_LABELME_NAME,
+            legacy_name=LEGACY_LABELME_NAME,
+        ),
+        "annotations": _resolve_versioned_path(
+            root,
+            annotations_name,
+            version=version,
+            default_name=DEFAULT_ANNOTATIONS_NAME,
+            legacy_name=LEGACY_ANNOTATIONS_NAME,
+        ),
+        "previews": _resolve_versioned_path(
+            root,
+            previews_name,
+            version=version,
+            default_name=DEFAULT_PREVIEWS_NAME,
+            legacy_name=LEGACY_PREVIEWS_NAME,
+        ),
+        "labels": _resolve_versioned_path(
+            root,
+            labels_name,
+            version=version,
+            default_name=DEFAULT_LABELS_NAME,
+            legacy_name=LEGACY_LABELS_NAME,
+        ),
     }
 
 
@@ -150,6 +183,24 @@ def _default_labels(version: LayoutVersion) -> list[str]:
 
 def _versioned_name(name: str, *, version: LayoutVersion) -> str:
     return name.replace("{version}", version)
+
+
+def _resolve_versioned_path(
+    root: Path,
+    name: str,
+    *,
+    version: LayoutVersion,
+    default_name: str,
+    legacy_name: str,
+) -> Path:
+    resolved = root / _versioned_name(name, version=version)
+    if name != default_name or resolved.exists():
+        return resolved
+
+    legacy = root / _versioned_name(legacy_name, version=version)
+    if legacy.exists():
+        return legacy
+    return resolved
 
 
 def _read_labels(path: Path, *, default_labels: Sequence[str]) -> list[str]:
@@ -202,6 +253,7 @@ def _ensure_dataset_dirs(paths: dict[str, Path], *, version: LayoutVersion) -> N
     paths["labelme"].mkdir(parents=True, exist_ok=True)
     paths["annotations"].mkdir(parents=True, exist_ok=True)
     paths["previews"].mkdir(parents=True, exist_ok=True)
+    _repair_labelme_version_metadata(paths["labelme"])
     default_labels = _default_labels(version)
     if not paths["labels"].exists():
         _write_labels(paths["labels"], default_labels)
@@ -340,7 +392,8 @@ def _write_labelme_json(
 ) -> None:
     data = {
         "version": "5.5.0",
-        "flags": {"layout_version": version},
+        "flags": {},
+        "layout_version": version,
         "shapes": list(shapes),
         "imagePath": _relative_path(image_path, json_path.parent),
         "imageData": None,
@@ -464,14 +517,62 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text("utf-8"))
 
 
+def _layout_version_from_value(value: Any) -> LayoutVersion | None:
+    for version in DEFAULT_LAYOUT_LABELS_BY_VERSION:
+        if value == version:
+            return version
+    return None
+
+
 def _labelme_layout_version(data: dict[str, Any]) -> LayoutVersion | None:
+    version = _layout_version_from_value(data.get("layout_version"))
+    if version is not None:
+        return version
+
     flags = data.get("flags")
     if not isinstance(flags, dict):
         return None
-    version = flags.get("layout_version")
-    if isinstance(version, str) and version in DEFAULT_LAYOUT_LABELS_BY_VERSION:
-        return version  # type: ignore[return-value]
+    version = _layout_version_from_value(flags.get("layout_version"))
+    if version is not None:
+        return version
+    for candidate in DEFAULT_LAYOUT_LABELS_BY_VERSION:
+        if flags.get(f"layout_version_{candidate}") is True:
+            return candidate
     return None
+
+
+def _repair_labelme_version_metadata(labelme_dir: Path) -> None:
+    repaired = 0
+    for json_path in _labelme_files(labelme_dir):
+        try:
+            data = _read_json(json_path)
+        except Exception:
+            continue
+
+        changed = False
+        version = _labelme_layout_version(data)
+        flags = data.get("flags")
+        if not isinstance(flags, dict):
+            flags = {}
+            data["flags"] = flags
+            changed = True
+        elif "layout_version" in flags:
+            flags.pop("layout_version")
+            changed = True
+
+        if version is not None and data.get("layout_version") != version:
+            data["layout_version"] = version
+            changed = True
+
+        if changed:
+            json_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                "utf-8",
+            )
+            repaired += 1
+
+    if repaired:
+        console.print(f"已修复{repaired}个LabelMe版本标记")
 
 
 def _filter_labelme_files_by_version(
@@ -651,6 +752,37 @@ def _write_coco(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", "utf-8")
 
 
+def _ensure_dir_link(link: Path, target: Path) -> None:
+    target = target.resolve()
+    if link.is_symlink():
+        if link.resolve() == target:
+            return
+        link.unlink()
+    elif link.exists():
+        if link.resolve() == target:
+            return
+        raise typer.BadParameter(
+            f"PaddleX数据视图路径已存在且不是链接: {link}；请删除后重试"
+        )
+
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        shutil.copytree(target, link, dirs_exist_ok=True)
+
+
+def _prepare_paddlex_dataset_dir(
+    paths: dict[str, Path],
+    *,
+    version: LayoutVersion,
+) -> Path:
+    dataset_dir = paths["root"] / f".paddlex-layout-{version}"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_dir_link(dataset_dir / "images", paths["images"])
+    _ensure_dir_link(dataset_dir / "annotations", paths["annotations"])
+    return dataset_dir
+
+
 def _convert_labelme_to_coco(
     paths: dict[str, Path],
     *,
@@ -702,14 +834,16 @@ def _convert_labelme_to_coco(
             append_labels=False,
         )
 
-    _write_coco(paths["annotations"] / "instance_train.json", train_coco)
-    _write_coco(paths["annotations"] / "instance_val.json", val_coco)
+    train_file = paths["annotations"] / "instance_train.json"
+    val_file = paths["annotations"] / "instance_val.json"
+    _write_coco(train_file, train_coco)
+    _write_coco(val_file, val_coco)
     return {
         "train": train_stats,
         "val": val_stats,
         "categories": len(labels),
-        "train_file": paths["annotations"] / "instance_train.json",
-        "val_file": paths["annotations"] / "instance_val.json",
+        "train_file": train_file,
+        "val_file": val_file,
     }
 
 
@@ -984,6 +1118,7 @@ def _run_paddlex(
     model_name = paddlex_model or DEFAULT_PADDLEX_MODELS[version]
     config_path = _resolve_config(root, config=config, model_name=model_name)
     output_path = output_dir or paths["root"] / "output" / f"layout-{version}"
+    dataset_dir = _prepare_paddlex_dataset_dir(paths, version=version)
     resolved_device = _resolve_paddlex_device(
         device=device,
         python_cmd=python_cmd,
@@ -1008,7 +1143,7 @@ def _run_paddlex(
             paddlex_root=root,
             config=config_path,
             mode="check_dataset",
-            dataset_dir=paths["root"],
+            dataset_dir=dataset_dir,
             output_dir=output_path,
             device=resolved_device,
             epochs=None,
@@ -1024,7 +1159,7 @@ def _run_paddlex(
             paddlex_root=root,
             config=config_path,
             mode="train",
-            dataset_dir=paths["root"],
+            dataset_dir=dataset_dir,
             output_dir=output_path,
             device=resolved_device,
             epochs=epochs,
