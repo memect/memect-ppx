@@ -124,6 +124,7 @@ DEFAULT_PADDLEX_MODELS: Final[dict[LayoutVersion, str]] = {
 def _dataset_paths(
     root: Path,
     *,
+    version: LayoutVersion,
     images_name: str,
     labelme_name: str,
     annotations_name: str,
@@ -132,11 +133,11 @@ def _dataset_paths(
 ) -> dict[str, Path]:
     return {
         "root": root,
-        "images": root / images_name,
-        "labelme": root / labelme_name,
-        "annotations": root / annotations_name,
-        "previews": root / previews_name,
-        "labels": root / labels_name,
+        "images": root / _versioned_name(images_name, version=version),
+        "labelme": root / _versioned_name(labelme_name, version=version),
+        "annotations": root / _versioned_name(annotations_name, version=version),
+        "previews": root / _versioned_name(previews_name, version=version),
+        "labels": root / _versioned_name(labels_name, version=version),
     }
 
 
@@ -145,6 +146,10 @@ def _default_labels(version: LayoutVersion) -> list[str]:
         return list(DEFAULT_LAYOUT_LABELS_BY_VERSION[version])
     except KeyError:
         raise ValueError(f"不支持的layout版本:{version}") from None
+
+
+def _versioned_name(name: str, *, version: LayoutVersion) -> str:
+    return name.replace("{version}", version)
 
 
 def _read_labels(path: Path, *, default_labels: Sequence[str]) -> list[str]:
@@ -219,7 +224,9 @@ def _ensure_dataset_dirs(paths: dict[str, Path], *, version: LayoutVersion) -> N
 
 def _labelme_args(paths: dict[str, Path]) -> str:
     return (
-        f"images --labels {paths['labels'].name} --output {paths['labelme'].name}"
+        f"{_relative_path(paths['images'], paths['root'])} "
+        f"--labels {_relative_path(paths['labels'], paths['root'])} "
+        f"--output {_relative_path(paths['labelme'], paths['root'])}"
     )
 
 
@@ -322,10 +329,18 @@ def _shape_from_object(obj: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _write_labelme_json(json_path: Path, image_path: Path, width: int, height: int, shapes: Sequence[dict[str, Any]]) -> None:
+def _write_labelme_json(
+    json_path: Path,
+    image_path: Path,
+    width: int,
+    height: int,
+    shapes: Sequence[dict[str, Any]],
+    *,
+    version: LayoutVersion,
+) -> None:
     data = {
         "version": "5.5.0",
-        "flags": {},
+        "flags": {"layout_version": version},
         "shapes": list(shapes),
         "imagePath": _relative_path(image_path, json_path.parent),
         "imageData": None,
@@ -430,6 +445,7 @@ def _prelabel_dataset(
             width,
             height,
             shapes,
+            version=version,
         )
         if preview:
             _draw_preview(
@@ -446,6 +462,45 @@ def _prelabel_dataset(
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text("utf-8"))
+
+
+def _labelme_layout_version(data: dict[str, Any]) -> LayoutVersion | None:
+    flags = data.get("flags")
+    if not isinstance(flags, dict):
+        return None
+    version = flags.get("layout_version")
+    if isinstance(version, str) and version in DEFAULT_LAYOUT_LABELS_BY_VERSION:
+        return version  # type: ignore[return-value]
+    return None
+
+
+def _filter_labelme_files_by_version(
+    labelme_files: Sequence[Path],
+    *,
+    version: LayoutVersion,
+) -> list[Path]:
+    selected: list[Path] = []
+    skipped: list[tuple[Path, LayoutVersion]] = []
+    for json_path in labelme_files:
+        data = _read_json(json_path)
+        annotation_version = _labelme_layout_version(data)
+        if annotation_version is not None and annotation_version != version:
+            skipped.append((json_path, annotation_version))
+            continue
+        selected.append(json_path)
+
+    if skipped and not selected:
+        examples = ", ".join(
+            f"{path}({annotation_version})"
+            for path, annotation_version in skipped[:3]
+        )
+        raise typer.BadParameter(
+            f"LabelMe标注版本不匹配: 当前{version}，发现{examples}；"
+            "请使用对应版本的--labelme，或重新预标注"
+        )
+    if skipped:
+        console.print(f"已跳过{len(skipped)}个其它版本LabelMe标注")
+    return selected
 
 
 def _resolve_labelme_image(json_path: Path, images_dir: Path, data: dict[str, Any]) -> Path:
@@ -556,7 +611,8 @@ def _build_coco(
                 if not append_labels:
                     raise typer.BadParameter(
                         f"标签不在label.txt中: {label} ({json_path})；"
-                        "请加入label.txt或使用--append-labels"
+                        "请加入label.txt或使用--append-labels；"
+                        "如果这是其它版本预标注，请使用对应版本目录或重新预标注"
                     )
                 categories.append(label)
                 category_ids[label] = len(categories)
@@ -607,6 +663,7 @@ def _convert_labelme_to_coco(
     labelme_files = _labelme_files(paths["labelme"])
     if not labelme_files:
         raise typer.BadParameter(f"没有找到LabelMe标注: {paths['labelme']}")
+    labelme_files = _filter_labelme_files_by_version(labelme_files, version=version)
 
     labels = _read_labels(paths["labels"], default_labels=_default_labels(version))
     train_items, val_items = _split_items(labelme_files, val_ratio, seed)
@@ -1017,6 +1074,7 @@ def _run_layout(
 ) -> None:
     paths = _dataset_paths(
         dir_,
+        version=version,
         images_name=images_name,
         labelme_name=labelme_name,
         annotations_name=annotations_name,
@@ -1134,10 +1192,10 @@ def layout(
     check: Annotated[bool, typer.Option(help="转换COCO后执行PaddleX数据校验")] = False,
     train: Annotated[bool, typer.Option(help="转换COCO后执行PaddleX训练")] = False,
     images_name: Annotated[str, typer.Option("--images", help="图片目录名")] = "images",
-    labelme_name: Annotated[str, typer.Option("--labelme", help="LabelMe标注目录名")] = "labelme",
-    annotations_name: Annotated[str, typer.Option("--annotations", help="COCO标注目录名")] = "annotations",
-    previews_name: Annotated[str, typer.Option("--previews", help="预标注可视化目录名")] = "previews",
-    labels_name: Annotated[str, typer.Option("--labels", help="类别文件名")] = "label.txt",
+    labelme_name: Annotated[str, typer.Option("--labelme", help="LabelMe标注目录名，支持{version}")] = "labelme-{version}",
+    annotations_name: Annotated[str, typer.Option("--annotations", help="COCO标注目录名，支持{version}")] = "annotations-{version}",
+    previews_name: Annotated[str, typer.Option("--previews", help="预标注可视化目录名，支持{version}")] = "previews-{version}",
+    labels_name: Annotated[str, typer.Option("--labels", help="类别文件名，支持{version}")] = "label-{version}.txt",
     model_path: Annotated[Path | None, typer.Option(help="预标注ONNX模型路径")] = None,
     engine: Annotated[LayoutEngine, typer.Option(help="预标注推理后端")] = "auto",
     score_threshold: Annotated[float, typer.Option(help="预标注置信度阈值")] = 0.5,
