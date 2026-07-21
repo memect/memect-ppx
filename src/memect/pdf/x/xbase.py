@@ -21,7 +21,6 @@ from memect.pdf.base import (
     KPage,
     KTable,
     KText,
-    TableIntent,
 )
 from memect.pdf.grid import Grid
 
@@ -548,10 +547,16 @@ class XObject:
         pass
     
     def jsonify(self)->Any:
-        return {
+        data = {
             'type':self.type,
             'objects':self._jsonify_objects(self._objects)
         }
+        if len(data['objects'])>1:
+            data['merged']=True
+        else:
+            #默认为False，不需要输出
+            pass
+
     
     def _jsonify_objects(self,objs:Sequence[KObject])->Any:
         return [self._jsonify_object(obj) for obj in objs]
@@ -726,6 +731,8 @@ class XCell:
         #TODO 再合并，输出xobjects?
         if self.objects:
             data['objects']=[jsonify_object(obj) for obj in self.objects]
+            if len(data['objects'])>1:
+                data['merged']=True
         return data
     
     @classmethod
@@ -838,6 +845,7 @@ class XTable(XObject):
             data['row_num']=self.row_num
             data['col_num']=self.col_num
             data['cells']=[cell.jsonify() for cell in self.cells]
+            data['merged']=True
         else:
             #没有合并，直接使用objects[0]即可
             pass
@@ -1105,6 +1113,8 @@ class XText(XObject):
             data['text']=self._text
         else:
             data['objects']=self._jsonify_objects(self._objects)
+            if len(data['objects'])>1:
+                data['merged']=True
         return data
     
     @override
@@ -1169,6 +1179,7 @@ class XFigure(XObject):
         if len(self.objects)>1:
             data['filename']=self.filename
             #data['bbox']
+            data['merged']=True
 
         return data
 
@@ -1242,6 +1253,8 @@ class XFormula(XObject):
                 data['filename']=self.filename
             if self.latex:
                 data['latex']=self.latex
+            
+            data['merged']=True
         return data
 
 class XBlock(XObject):

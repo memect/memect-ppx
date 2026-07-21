@@ -478,7 +478,7 @@ class LayoutModel(Model):
                     elif version == "plus_l":
                         model_path = get_model_path("PP-DocLayout_plus-L") / "inference.onnx"
                     elif version == "auto":
-                        model_path = get_model_path("pp_layoutv3.onnx")
+                        model_path = get_model_path("PP-DocLayout-V3") / "inference.onnx"
                     else:
                         raise ValueError(f"不支持的version:{version}")
                     params["model_path"] = model_path

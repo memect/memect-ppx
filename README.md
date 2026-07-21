@@ -211,3 +211,42 @@ settings = {
 外部大模型服务通过 URL 配置：`PPX_DEEPSEEK_URL`、`PPX_PADDLE_URL`、`PPX_GLM_URL`、`PPX_BAIDU_URL`。如果模型服务跑在宿主机，Docker 内可使用 `http://host.docker.internal:<port>/v1`；如果跑在同一 compose 网络，改成对应服务名。
 
 安全上不建议把该服务直接暴露到公网。当前 `/api/parse`、`/api/parse/state`、`/admin/gc` 等接口未做鉴权，生产环境应放在内网或反向代理鉴权之后。
+
+
+## 训练布局模型
+
+```bash
+#可以clone ppx或者安装ppx，在当前目录上安装PaddleX
+$cd ppx
+$git clone https://github.com/PaddlePaddle/PaddleX.git
+#国内走代理
+$git clone https://gh-proxy.org/https://github.com/PaddlePaddle/PaddleX.git
+
+$cd Paddlex
+$uv venv -p 3.12
+$source .venv/bin/activate
+#查看官方文档安装对应的gpu版本
+$uv pip install paddlepaddle-gpu==3.3.0 --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+$uv pip install -e ".[base]"
+$uv pip install pip
+#安装plugin
+$paddlex install PaddleOCR
+
+
+#安装labelme，标注图片
+$uv tool install labelme
+
+#把需要训练的图片放在images目录下
+$mkdir -p layout-project/images
+
+#生成预标注，支持"l","plus_l"模型
+$./ppx train layout l --dir layout-project
+
+$cd layout-project & labelme images --labels label-l.txt --output labelme-l
+
+#执行训练
+$./ppx train layout l --dir layout-project --device gpu:0  --export-onnx
+
+$./ppx train layout l --dir layout-project 
+
+```

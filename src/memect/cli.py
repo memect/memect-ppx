@@ -338,6 +338,8 @@ def parse(
     # remove_watermark:Annotated[bool|None,typer.Option(help='设置是否需要清除水印')]=None,
     tree:Annotated[TreeBackend|None,typer.Option(help='如何解析章节树')]=None,
     feature:Annotated[str|None,typer.Option(help='可以输入多个，使用逗号分隔')]=None,
+    layout_model:Annotated[str|None,typer.Option(help='v2/v3/l/plus_l')]=None,
+    layout_model_path:Annotated[str|None,typer.Option(help='自训练的模型目录，必须包含inference.onnx')]|None=None,
     # all:Annotated[bool,typer.Option()]=None,
     md: Annotated[bool | None, typer.Option(help="生成markdown，默认为true")] = None,
     doc_json: Annotated[bool | None, typer.Option("--json", help="输出json，默认为true")] = None,
@@ -425,6 +427,11 @@ def parse(
         # 如果使用gpu，将需要更大的内存
         for n in ["ocr", "layout", "formula", "table"]:
             custom_settings[f"model_manager.executors.{n}.max_workers"] = parallel
+    
+    if layout_model is not None:
+        custom_settings['model_manager.models.layout.kwargs.version']=layout_model
+    if layout_model_path is not None:
+        custom_settings['model_manager.models.layout.kwargs.model_path']=layout_model_path
 
     _set_device(cpu, cuda=cuda)
 

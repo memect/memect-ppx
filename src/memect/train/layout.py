@@ -1095,6 +1095,174 @@ def _run_subprocess(cmd: Sequence[str], *, cwd: Path, dry_run: bool) -> None:
     subprocess.check_call(list(cmd), cwd=cwd)
 
 
+def _resolve_inference_dir(output_path: Path, *, dry_run: bool) -> Path:
+    expected = output_path / "model_final" / "inference"
+    if expected.is_dir() or dry_run:
+        return expected
+
+    matches = sorted(
+        path
+        for path in output_path.rglob("inference")
+        if path.is_dir() and path.parent.name == "model_final"
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise typer.BadParameter(
+            f"找到多个model_final/inference目录: {matches}；请用--output指定训练输出目录"
+        )
+    raise typer.BadParameter(
+        f"训练完成，但找不到Paddle inference目录: {expected}"
+    )
+
+
+def _resolve_paddle2onnx_command(
+    *,
+    python_cmd: str,
+    paddle2onnx: Path | None,
+) -> list[str]:
+    if paddle2onnx is not None:
+        path = paddle2onnx.expanduser().resolve()
+        if not path.is_file():
+            raise typer.BadParameter(f"paddle2onnx不存在: {path}")
+        return [str(path)]
+
+    python_path = Path(python_cmd)
+    candidates = [
+        python_path.parent / "paddle2onnx",
+        python_path.parent / "paddle2onnx.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return [str(candidate)]
+    paddle2onnx_cmd = shutil.which("paddle2onnx")
+    if paddle2onnx_cmd:
+        return [paddle2onnx_cmd]
+    return [python_cmd, "-m", "paddle2onnx"]
+
+
+def _paddle2onnx_command(
+    *,
+    python_cmd: str,
+    paddle2onnx: Path | None,
+    inference_dir: Path,
+    onnx_opset: int | None,
+) -> list[str]:
+    cmd = [
+        *_resolve_paddle2onnx_command(
+            python_cmd=python_cmd,
+            paddle2onnx=paddle2onnx,
+        ),
+        "--model_dir",
+        str(inference_dir.resolve()),
+        "--model_filename",
+        "inference.pdmodel",
+        "--params_filename",
+        "inference.pdiparams",
+        "--save_file",
+        str((inference_dir / "inference.onnx").resolve()),
+    ]
+    if onnx_opset is not None:
+        cmd.extend(["--opset_version", str(onnx_opset)])
+    return cmd
+
+
+def _export_paddle_onnx(
+    *,
+    python_cmd: str,
+    paddle2onnx: Path | None,
+    output_path: Path,
+    onnx_opset: int | None,
+    dry_run: bool,
+) -> Path:
+    inference_dir = _resolve_inference_dir(output_path, dry_run=dry_run)
+    model_file = inference_dir / "inference.pdmodel"
+    params_file = inference_dir / "inference.pdiparams"
+    onnx_file = inference_dir / "inference.onnx"
+    if not dry_run:
+        missing = [path for path in (model_file, params_file) if not path.is_file()]
+        if missing:
+            raise typer.BadParameter(
+                "训练完成，但Paddle inference模型文件不完整: "
+                + ", ".join(str(path) for path in missing)
+            )
+
+    cmd = _paddle2onnx_command(
+        python_cmd=python_cmd,
+        paddle2onnx=paddle2onnx,
+        inference_dir=inference_dir,
+        onnx_opset=onnx_opset,
+    )
+    try:
+        _run_subprocess(cmd, cwd=inference_dir, dry_run=dry_run)
+    except subprocess.CalledProcessError as exc:
+        raise typer.BadParameter(
+            "paddle2onnx执行失败；请确认PaddleX环境已安装paddle2onnx，"
+            "或通过--paddle2onnx指定可执行文件"
+        ) from exc
+    return onnx_file
+
+
+def _resolve_output_path(
+    paths: dict[str, Path],
+    *,
+    version: LayoutVersion,
+    output_dir: Path | None,
+) -> Path:
+    return (output_dir or paths["root"] / "output" / f"layout-{version}").resolve()
+
+
+def _resolve_export_python(
+    *,
+    python: Path | None,
+    paddlex_root: Path | None,
+) -> str:
+    if paddlex_root is not None:
+        return _resolve_python(python, _find_paddlex_root(paddlex_root))
+
+    if python is not None:
+        path = python.expanduser().resolve()
+        if not path.is_file():
+            raise typer.BadParameter(f"Python解释器不存在: {path}")
+        return str(path)
+
+    for candidate in (Path("./PaddleX"), Path("../PaddleX")):
+        candidate = candidate.expanduser().resolve()
+        if _is_paddlex_root(candidate):
+            return _resolve_python(None, candidate)
+    return sys.executable
+
+
+def _export_existing_onnx(
+    version: LayoutVersion,
+    paths: dict[str, Path],
+    *,
+    python: Path | None,
+    paddlex_root: Path | None,
+    output_dir: Path | None,
+    paddle2onnx: Path | None,
+    onnx_opset: int | None,
+    dry_run: bool,
+) -> None:
+    python_cmd = _resolve_export_python(
+        python=python,
+        paddlex_root=paddlex_root,
+    )
+    output_path = _resolve_output_path(
+        paths,
+        version=version,
+        output_dir=output_dir,
+    )
+    onnx_file = _export_paddle_onnx(
+        python_cmd=python_cmd,
+        paddle2onnx=paddle2onnx,
+        output_path=output_path,
+        onnx_opset=onnx_opset,
+        dry_run=dry_run,
+    )
+    console.print(f"onnx: {onnx_file}")
+
+
 def _run_paddlex(
     version: LayoutVersion,
     paths: dict[str, Path],
@@ -1109,6 +1277,9 @@ def _run_paddlex(
     num_classes: int | None,
     dy2st: bool,
     overrides: Sequence[str] | None,
+    export_onnx: bool,
+    onnx_opset: int | None,
+    paddle2onnx: Path | None,
     dry_run: bool,
     check_dataset: bool,
     train: bool,
@@ -1117,7 +1288,11 @@ def _run_paddlex(
     python_cmd = _resolve_python(python, root)
     model_name = paddlex_model or DEFAULT_PADDLEX_MODELS[version]
     config_path = _resolve_config(root, config=config, model_name=model_name)
-    output_path = output_dir or paths["root"] / "output" / f"layout-{version}"
+    output_path = _resolve_output_path(
+        paths,
+        version=version,
+        output_dir=output_dir,
+    )
     dataset_dir = _prepare_paddlex_dataset_dir(paths, version=version)
     resolved_device = _resolve_paddlex_device(
         device=device,
@@ -1168,6 +1343,15 @@ def _run_paddlex(
             overrides=effective_overrides,
         )
         _run_subprocess(cmd, cwd=root, dry_run=dry_run)
+        if export_onnx:
+            onnx_file = _export_paddle_onnx(
+                python_cmd=python_cmd,
+                paddle2onnx=paddle2onnx,
+                output_path=output_path,
+                onnx_opset=onnx_opset,
+                dry_run=dry_run,
+            )
+            console.print(f"onnx: {onnx_file}")
 
 
 def _run_layout(
@@ -1204,6 +1388,9 @@ def _run_layout(
     epochs: int | None,
     dy2st: bool,
     overrides: Sequence[str] | None,
+    export_onnx: bool | None,
+    onnx_opset: int | None,
+    paddle2onnx: Path | None,
     skip_check: bool,
     dry_run: bool,
 ) -> None:
@@ -1216,7 +1403,9 @@ def _run_layout(
         previews_name=previews_name,
         labels_name=labels_name,
     )
-    has_action = init or prelabel or prepare or check or train
+    export_requested = export_onnx is True
+    export_after_train = export_onnx is not False
+    has_action = init or prelabel or prepare or check or train or export_requested
 
     if init:
         _init_dataset(paths, version=version)
@@ -1262,10 +1451,25 @@ def _run_layout(
             epochs=epochs,
             dy2st=dy2st,
             overrides=overrides,
+            export_onnx=export_after_train,
+            onnx_opset=onnx_opset,
+            paddle2onnx=paddle2onnx,
             dry_run=dry_run,
             check_dataset=check or (train and not skip_check),
             train=train,
             num_classes=stats["categories"] if (prepare or check or train) else None,
+        )
+
+    if export_requested and not train:
+        _export_existing_onnx(
+            version,
+            paths,
+            python=python,
+            paddlex_root=paddlex_root,
+            output_dir=output_dir,
+            paddle2onnx=paddle2onnx,
+            onnx_opset=onnx_opset,
+            dry_run=dry_run,
         )
 
     if has_action:
@@ -1312,6 +1516,9 @@ def _run_layout(
         num_classes=stats["categories"],
         dy2st=dy2st,
         overrides=overrides,
+        export_onnx=export_after_train,
+        onnx_opset=onnx_opset,
+        paddle2onnx=paddle2onnx,
         dry_run=dry_run,
         check_dataset=not skip_check,
         train=True,
@@ -1351,6 +1558,9 @@ def layout(
     epochs: Annotated[int | None, typer.Option(help="训练轮数，写入Train.epochs_iters")] = None,
     dy2st: Annotated[bool, typer.Option(help="PaddleX训练时开启dy2st")] = False,
     overrides: Annotated[list[str] | None, typer.Option("--set", help="额外PaddleX -o参数，如Train.epochs_iters=10")] = None,
+    export_onnx: Annotated[bool | None, typer.Option(help="用paddle2onnx生成model_final/inference/inference.onnx；单独使用时不执行训练")] = None,
+    onnx_opset: Annotated[int | None, typer.Option(help="paddle2onnx导出ONNX的opset_version；不填则使用paddle2onnx默认值")] = None,
+    paddle2onnx: Annotated[Path | None, typer.Option(help="paddle2onnx可执行文件路径；默认查找PaddleX Python同目录，否则使用python -m paddle2onnx")] = None,
     skip_check: Annotated[bool, typer.Option(help="训练前跳过PaddleX数据校验")] = False,
     dry_run: Annotated[bool, typer.Option(help="只打印PaddleX命令，不执行")] = False,
 ) -> None:
@@ -1388,6 +1598,9 @@ def layout(
         epochs=epochs,
         dy2st=dy2st,
         overrides=overrides,
+        export_onnx=export_onnx,
+        onnx_opset=onnx_opset,
+        paddle2onnx=paddle2onnx,
         skip_check=skip_check,
         dry_run=dry_run,
     )
