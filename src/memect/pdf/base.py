@@ -1524,11 +1524,12 @@ class KPage:
             # "bbox": self.bbox.jsonify(),
             "width": self.width,
             "height": self.height,
-            #'header':{},
-            #'footer':{},
+            'header': self.header.jsonify(),
+            'footer': self.footer.jsonify(),
             #'footnotes':[],
             "objects": [],
         }
+
         if not lite:
             for obj in self.objects:
                 data["objects"].append(obj.jsonify())
@@ -3961,6 +3962,13 @@ class KPageHeader(KObject):
     @property
     def content_bbox(self) -> BBox | None:
         return BBox.join([obj.content_bbox for obj in self.objects],strict=False)
+    
+    @override
+    def jsonify(self)->Any:
+        return {
+            'bbox':self.bbox.jsonify(),
+            'objects':[obj.jsonify() for obj in self.objects]
+        }
 
 
 class KPageFooter(KObject):

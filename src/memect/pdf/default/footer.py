@@ -2,6 +2,7 @@
 from math import e
 
 from memect.base.bbox import BBox
+from memect.pdf.sort import Sorter
 
 from ..base import KDocument, KObject
 
@@ -29,5 +30,12 @@ class PageFooterParser:
             if len(footer_objects)>0:
                 bbox = BBox.join2(footer_objects)
                 bbox = page.bbox.adjust(y1=bbox.y1)
-                bbox.get(page.objects,ratio=0.5,remove=True)
+                objs=bbox.get(page.objects,ratio=0.5,remove=True)
+                all_objs:list[KObject]=[]
+                all_objs.extend(footer_objects)
+                all_objs.extend(objs)
+                Sorter.sort(all_objs)
+                page.footer.objects.clear()
+                page.footer.objects.extend(all_objs)
+                page.footer.bbox = BBox.join2(all_objs).adjust(x0=0,x1=page.width,y0=0)
         pass
