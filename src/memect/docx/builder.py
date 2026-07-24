@@ -1,10 +1,10 @@
-from typing import Any, Final, Sequence
+import re
+from typing import Any, Final, Sequence, cast
 
 from memect.base.bbox import BBox
-from memect.pdf.base import KChar, KColor, KDocument, KFigure, KFormula, KObject, KPage, KRect, KSpan, KTable, KText, KTextline, TableIntent
+from memect.pdf.base import KChar, KColor, KDocument, KFigure, KFormula, KObject, KPage, KRect, KSection, KSpan, KTable, KText, KTextline, TableIntent
 from memect.pdf.x.xbase import XBlock, XFigure, XFormula, XSection, XTable, XText
-from .document import Document
-from .model import Paragraph, Section, SectionMargins, TableCell
+from .model import Document, Paragraph, Picture, Section, SectionMargins, TableCell
 from .units import pt, twip
 
 
@@ -218,7 +218,8 @@ class DocxBuilder:
         # 首页（没有页眉页脚）
 
         assert kdoc.tree is not None
-        
+
+        header_done=False
         first = True
         for ksection in kdoc.tree.get_sections():
             self._render_xsection(doc, ksection)
@@ -226,6 +227,108 @@ class DocxBuilder:
                 # 把自动生成的删除
                 first = False
                 del doc.sections[0]
+
+            if not header_done:
+                #如果需要100%一致，可以每个节都设置自己的header/footer，因为有些文档是复制粘贴过来的，很乱
+                #现在不追求，只使用一个，也就是仅仅在第一节设置
+                #可以有多个不同的节（section），但是所有的节都适用同一个header/footer（不再特别设置）
+                #也不追求100%遵循原文
+                header_done = self._render_header_footer(doc.sections[-1],ksection)
+
+    def _render_header_footer(self,section:Section,ksection:XSection)->bool:
+        
+        for page in ksection.pages:
+            if page.header.objects or page.footer.objects:
+                pass
+
+        def get_page()->KPage|None:
+            #找到对象最多的一个，因为有些首页使用特别的设置，或者有些多个页面复制粘帖过来，混乱的
+
+            pages = sorted(ksection.pages,key=lambda page:(len(page.header.objects),len(page.footer.objects)))
+            if not pages:
+                return None
+
+            return pages[-1]
+
+
+
+        def get_alignment(obj:KObject)->str:
+            bbox = obj.bbox
+            d=bbox.x0-(obj.page.width-bbox.x1)
+            if abs(d)<=20:
+                return 'center'
+            elif d<0:
+                return 'left'
+            else:
+                return 'right'
+
+        def get_page_number_template(s:str)->str|None:
+            patterns=[
+                ('{page}',r'[0-9]+'),
+                ('第{page}页',r'第[0-9]+页'),
+                ('{page}of{total}',r'[0-9]+of[0-9]+'),
+                ('{page}/{total}',r'[0-9]+/[0-9]+')
+            ]
+            s=re.sub(r'[\s]','',s)
+            for t,p in patterns:
+                if re.fullmatch(p,s,re.IGNORECASE):
+                    return t
+            return None
+
+        def render_header_footer(page:KPage,is_header:bool=False):
+            if is_header:
+                objects = page.header.objects
+            else:
+                objects = page.footer.objects
+            if len(objects)<1:
+                return
+            objects = sorted(objects,key=lambda obj:obj.bbox.x0)
+            left:Any=None
+            right:Any=None
+            center:Any=None
+            for obj in objects:
+                alignment = get_alignment(obj)
+                obj2:Any=None
+                if isinstance(obj,KText):
+                    obj2 = get_page_number_template(obj.text) or obj.text
+                elif isinstance(obj,KFigure):
+                    assert section.document is not None
+                    obj2=section.document.create_picture(obj.fullpath,height=pt(obj.bbox.height),width=pt(obj.bbox.width))
+                else:
+                    pass
+
+                if alignment=='left':
+                    left=obj2
+                elif alignment=='center':
+                    center=obj2
+                elif alignment=='right':
+                    right=obj2
+                else:
+                    pass
+
+                
+
+            #去掉左右空白即可？
+            #width = max(page.width-180,BBox.join2(objects).width)
+            width = page.width-180
+            if is_header:
+                section.header.add_parts(left=left,center=center,right=right,width=pt(width)) 
+            else:
+                section.footer.add_parts(left=left,center=center,right=right,width=pt(width))         
+
+        page  = get_page()
+        if page is None or (not page.header.objects and not page.footer.objects):
+            return False
+        #True表示为第一节
+
+        #首页，没有页眉页脚，或者使用自己的页眉页脚？
+        section.first_page_different=True
+        #section.first_header
+        #section.first_footer
+        #render_header(page)
+        render_header_footer(page,is_header=True)
+        render_header_footer(page,is_header=False)
+        return True
 
     def _render_xsection(
         self, doc: Document, xsection: XSection
@@ -242,6 +345,7 @@ class DocxBuilder:
             else:
                 return False
         
+
 
         #下面这些，每一节都必须设置，因为不会继承，如果没有设置，使用schema默认值
         #纸张大小: 不会继承上一节的，如果没有设置，使用schema的默认
@@ -285,24 +389,6 @@ class DocxBuilder:
         margins.bottom=pt(72)
         section = doc.add_section(start=xsection.start, columns=xsection.col_num,page_width=page_width,page_height=page_height,orientation=orientation,margins=margins)
 
-        #True表示为第一节
-        is_first = kpage.number==1
-        if kpage.number==1 and not kpage.header.objects and not kpage.footer.objects:
-            #首页，没有页眉页脚，或者使用自己的页眉页脚？
-            section.first_page_different=True
-            #section.first_header
-            #section.first_footer
-            pass
-
-        #如果需要100%一致，可以每个节都设置自己的header/footer，因为有些文档是复制粘贴过来的，很乱
-        #现在不追求，只使用一个，也就是仅仅在第一节设置
-        if is_first:
-            section.header.add_paragraph('测试页眉',alignment='right')
-            section.footer.add_paragraph('测试页脚',alignment='left')
-            section.set_page_numbering(format='decimal')
-            #可以根据原文推理一个，或者就使用一个固定的
-            section.add_page_number(position='footer',template='第{page}页',alignment='center')
-
         #如果是目录章节
         is_toc=False
         if is_toc:
@@ -339,13 +425,14 @@ class DocxBuilder:
 
         doc:Final[Document] = sec.document
         mode='simple'
+        mode=''
         if mode=='simple':
             #一个段落即可，字体大小/颜色/粗体/斜体/下划线等，都统一
             if xtext.node.is_title() and xtext.no is not None:
                 #表示为标题，判断是否有序号，可以添加序号
                 #这个仅仅允许1-3级，而且自动设置style=Heading1-3
                 sec.add_heading(xtext.text,level=1)
-                sec.add_list_item('xxx')
+                #sec.add_list_item('xxx')
             else:
                 fontsize=10
                 #首行缩进2个字符
@@ -381,11 +468,11 @@ class DocxBuilder:
                 #如果为同一行，且间距过大
                 n=int((obj2.bbox.x1-obj1.bbox.x0)//10)
                 if n>0:
-                    p.add_run(' '*n,size=fontsize)
+                    p.add_run(' '*n,size=10)
 
             p=sec.add_paragraph()
             for i,obj in enumerate(objs):
-                fill_spaces(p,i,objs)
+                #fill_spaces(p,i,objs)
                 if isinstance(obj,KSpan):
                     span = obj
                     if not span.color.is_black():
@@ -400,13 +487,8 @@ class DocxBuilder:
                     p.add_picture(doc.create_picture(obj.fullpath,width=pt(obj.bbox.width),height=pt(obj.bbox.height)))
                 else:
                     pass
-            groups:list[Any]=[]
-            
-            for group in groups:
-                p.add_run('')
-            
 
-
+            
 
     def _render_xtable(self, sec: Section, xtable: XTable):
 
@@ -468,7 +550,7 @@ class DocxBuilder:
                     
 
         # TODO 还需要设置是否表头重复，跨页断行
-        table = sec.add_table(rows=xtable.row_num, cols=xtable.col_num, cells=cells,alignment='center')
+        table = sec.add_table(rows=xtable.row_num, cols=xtable.col_num, cells=cells,style=None,alignment='center',borders=xtable.is_ybk())
         if xtable.tables[0].header is not None:
             #表头重复
             table.set_repeat_header_rows(xtable.tables[0].header.row_num)
@@ -480,11 +562,11 @@ class DocxBuilder:
         
         #就是总是设置为跨页断行
         table.set_allow_row_break_across_pages(True)
+        
 
         #设置表格列或者行使用交替颜色，为了简化或者统一修改，使用style的方式更好？
         #table.set_banded_rows('','')
         #table.set_banded_columns('','')
-
 
 
     def _render_xfigure(self, sec: Section, xfigure: XFigure):
@@ -519,11 +601,7 @@ class DocxBuilder:
         alignment='center'
         sec.add_picture(xformula.fullpath, width=pt(width), height=pt(height),alignment=alignment)
 
-    def _render_pages(self,doc: Document,kdoc:KDocument):
-        for page in kdoc.pages:
-            #每个页面都添加一个
-            pass
-        pass
+
 
 
     

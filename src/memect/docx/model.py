@@ -122,7 +122,7 @@ class Paragraph:
     inlines: list[Inline] = field(default_factory=list)
     list_kind: Literal["bullet", "decimal"] | None = None
     list_level: int = 0
-    document: Any | None = field(default=None, repr=False, compare=False)
+    document: Document | None = field(default=None, repr=False, compare=False)
 
     def add_run(
         self,
@@ -235,7 +235,7 @@ class TableCell:
     col_index: int | None = None
     shading: str | None = None
     vertical_align: VerticalAlignment | None = None
-    document: Any | None = field(default=None, repr=False, compare=False)
+    document: Document | None = field(default=None, repr=False, compare=False)
 
     def add_paragraph(
         self,
@@ -371,7 +371,7 @@ class Table:
     banded_row_shading: ShadingPair | None = None
     banded_column_shading: ShadingPair | None = None
     look: TableLook = field(default_factory=TableLook)
-    document: Any | None = field(default=None, repr=False, compare=False)
+    document: Document | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create(
@@ -552,7 +552,7 @@ def _create_table(
     style: str | None,
     alignment: Alignment | None,
     borders: bool,
-    document: Any | None,
+    document: Document | None,
 ) -> Table:
     if data is not None and cells is not None:
         raise ValueError("data and cells cannot be used together")
@@ -574,7 +574,7 @@ def _create_table(
     return table
 
 
-def _attach_table_document(table: Table, document: Any | None) -> None:
+def _attach_table_document(table: Table, document: Document | None) -> None:
     table.document = document
     seen: set[int] = set()
     for row in table.rows:
@@ -596,7 +596,7 @@ def _attach_table_document(table: Table, document: Any | None) -> None:
             _attach_block_document(block, document)
 
 
-def _attach_block_document(block: Any, document: Any | None) -> None:
+def _attach_block_document(block: Any, document: Document | None) -> None:
     if isinstance(block, Paragraph):
         block.document = document
         for index, inline in enumerate(block.inlines):
@@ -627,7 +627,7 @@ class SectionMargins:
 @dataclass
 class HeaderFooter:
     blocks: list[Any] = field(default_factory=list)
-    document: Any | None = field(default=None, repr=False, compare=False)
+    document: Document | None = field(default=None, repr=False, compare=False)
 
     def add_paragraph(
         self,
@@ -641,6 +641,273 @@ class HeaderFooter:
             paragraph.add_run(text)
         paragraph.document = self.document
         self.blocks.append(paragraph)
+        return paragraph
+
+    def add_text(
+        self,
+        text: str,
+        page_number_format: str | None = None,
+        page_number_position: Literal["left", "center", "right"] = "right",
+        *,
+        style: str | None = None,
+        width: Length | int | float | None = None,
+    ) -> Paragraph | Table:
+        if page_number_format is None:
+            return self.add_paragraph(text, style=style, alignment="left")
+
+        if page_number_position == "right":
+            return self.add_parts(
+                left=text,
+                right=page_number_format,
+                style=style,
+                width=width,
+            )
+        if page_number_position == "center":
+            return self.add_parts(
+                left=text,
+                center=page_number_format,
+                style=style,
+                width=width,
+            )
+        if page_number_position == "left":
+            return self.add_parts(
+                left=page_number_format,
+                right=text,
+                style=style,
+                width=width,
+            )
+        raise ValueError("page_number_position must be 'left', 'center', or 'right'")
+
+    def add_parts(
+        self,
+        *,
+        left: Any | None = None,
+        center: Any | None = None,
+        right: Any | None = None,
+        style: str | None = None,
+        width: Length | int | float | None = None,
+        picture_width: Length | int | float | None = None,
+        picture_height: Length | int | float | None = None,
+        picture_alt_text: str = "",
+    ) -> Table:
+        parts = self._layout_parts(left=left, center=center, right=right)
+        table_width = width if width is not None else inch(6.5)
+        cell_widths = self._part_widths(table_width, parts, proportional=center is None)
+        table = self.add_table(1, len(parts), style=None, borders=False)
+        table.width = table_width
+
+        for index, (content, alignment) in enumerate(parts):
+            cell = table.cell(0, index)
+            cell.width = cell_widths[index]
+            paragraph = cell.add_paragraph(style=style, alignment=alignment)
+            self._append_part(
+                paragraph,
+                content,
+                picture_width=picture_width,
+                picture_height=picture_height,
+                picture_alt_text=picture_alt_text,
+            )
+
+        return table
+
+    def _layout_parts(
+        self,
+        *,
+        left: Any | None,
+        center: Any | None,
+        right: Any | None,
+    ) -> list[tuple[Any | None, Alignment]]:
+        if center is not None:
+            return [
+                (left, "left"),
+                (center, "center"),
+                (right, "right"),
+            ]
+        if left is not None and right is not None:
+            return [
+                (left, "left"),
+                (right, "right"),
+            ]
+        if left is not None:
+            return [(left, "left")]
+        if right is not None:
+            return [(right, "right")]
+        return [(None, "left")]
+
+    def _append_part(
+        self,
+        paragraph: Paragraph,
+        content: Any,
+        *,
+        picture_width: Length | int | float | None,
+        picture_height: Length | int | float | None,
+        picture_alt_text: str,
+    ) -> None:
+        if content is None:
+            return
+        if isinstance(content, Picture):
+            paragraph.add_picture(content)
+            return
+        if isinstance(content, _PendingPicture):
+            self._append_pending_picture(paragraph, content)
+            return
+        if isinstance(content, Path | bytes):
+            self._append_picture_source(
+                paragraph,
+                content,
+                width=picture_width,
+                height=picture_height,
+                alt_text=picture_alt_text,
+            )
+            return
+        if isinstance(content, PageField):
+            paragraph.inlines.append(content)
+            return
+        if isinstance(content, Run):
+            content.paragraph = paragraph
+            paragraph.inlines.append(content)
+            return
+        _append_page_number_text(paragraph, str(content))
+
+    def _append_picture_source(
+        self,
+        paragraph: Paragraph,
+        source: Path | bytes,
+        *,
+        width: Length | int | float | None,
+        height: Length | int | float | None,
+        alt_text: str,
+    ) -> None:
+        pending = _PendingPicture(
+            source=source,
+            width=width,
+            height=height,
+            alt_text=alt_text,
+        )
+        self._append_pending_picture(paragraph, pending)
+
+    def _append_pending_picture(
+        self,
+        paragraph: Paragraph,
+        picture: _PendingPicture,
+    ) -> None:
+        if self.document is None:
+            paragraph.inlines.append(picture)
+            return
+        paragraph.add_picture(
+            self.document.create_picture(
+                picture.source,
+                width=picture.width,
+                height=picture.height,
+                alt_text=picture.alt_text,
+            )
+        )
+
+    def _part_widths(
+        self,
+        width: Length | int | float | None,
+        parts: list[tuple[Any | None, Alignment]],
+        *,
+        proportional: bool,
+    ) -> list[Length | None]:
+        length = ensure_length(width, default_unit="in")
+        if length is None:
+            return [None for _ in parts]
+        if len(parts) == 1:
+            return [length]
+
+        if proportional and len(parts) == 2:
+            weights = [self._content_width_hint(content) for content, _ in parts]
+            total_weight = sum(weights)
+            if total_weight <= 0:
+                ratios = [0.5, 0.5]
+            else:
+                first_ratio = weights[0] / total_weight
+                first_ratio = min(0.8, max(0.2, first_ratio))
+                ratios = [first_ratio, 1.0 - first_ratio]
+            return [inch(length.inches() * ratio) for ratio in ratios]
+
+        part_width = inch(length.inches() / len(parts))
+        return [part_width for _ in parts]
+
+    def _content_width_hint(self, content: Any | None) -> float:
+        if content is None:
+            return 0.0
+        if isinstance(content, Picture):
+            return self._length_width_hint(Length(content.width_emu, "emu"))
+        if isinstance(content, _PendingPicture):
+            if content.width is not None:
+                return self._length_width_hint(content.width)
+            if content.height is not None:
+                return self._length_width_hint(content.height)
+            return 8.0
+        if isinstance(content, Path | bytes):
+            return 8.0
+        if isinstance(content, PageField):
+            return 3.0
+        if isinstance(content, Run):
+            if content.break_type:
+                return 0.0
+            if content.tab:
+                return 1.5
+            return self._text_width_hint(content.text)
+        if isinstance(content, str):
+            return self._text_width_hint(content)
+        return self._text_width_hint(str(content))
+
+    def _length_width_hint(self, value: Length | int | float | None) -> float:
+        length = ensure_length(value, default_unit="in")
+        if length is None:
+            return 0.0
+        return max(2.0, length.inches() * 8.0)
+
+    def _text_width_hint(self, text: str) -> float:
+        total = 0.0
+        try:
+            for literal, field_name, _, _ in Formatter().parse(text):
+                total += self._plain_text_width_hint(literal)
+                if field_name is not None:
+                    total += self._page_field_width_hint(field_name)
+        except ValueError:
+            total += self._plain_text_width_hint(text)
+        return max(1.0, total)
+
+    def _plain_text_width_hint(self, text: str) -> float:
+        import unicodedata
+
+        total = 0.0
+        for char in text:
+            if char.isspace():
+                total += 0.35
+                continue
+            if unicodedata.east_asian_width(char) in ("F", "W"):
+                total += 2.0
+            else:
+                total += 1.0
+        return total
+
+    def _page_field_width_hint(self, field_name: str) -> float:
+        if field_name in _PAGE_NUMBER_PLACEHOLDERS:
+            return 3.0
+        return self._plain_text_width_hint("{" + field_name + "}")
+
+    def add_picture(
+        self,
+        source: str | Path | bytes,
+        *,
+        width: Length | int | float | None = None,
+        height: Length | int | float | None = None,
+        alt_text: str = "",
+        alignment: Alignment | None = None,
+    ) -> Paragraph:
+        picture = self.document.create_picture(
+            source,
+            width=width,
+            height=height,
+            alt_text=alt_text,
+        )
+        paragraph = self.add_paragraph(alignment=alignment)
+        paragraph.add_picture(picture)
         return paragraph
 
     def has_content(self) -> bool:
@@ -675,7 +942,7 @@ class HeaderFooter:
 class Footnote:
     footnote_id: int
     blocks: list[Any] = field(default_factory=list)
-    document: Any | None = field(default=None, repr=False, compare=False)
+    document: Document | None = field(default=None, repr=False, compare=False)
 
     def add_paragraph(
         self,
@@ -796,7 +1063,7 @@ class Section:
     first_page_different: bool = False
     odd_even_different: bool = False
     page_numbering: PageNumbering = field(default_factory=PageNumbering)
-    document: Any | None = field(default=None, repr=False, compare=False)
+    document: Document | None = field(default=None, repr=False, compare=False)
 
     @property
     def odd_header(self) -> HeaderFooter:
@@ -1200,3 +1467,197 @@ class DocumentProperties:
     description: str = ""
     created: datetime = field(default_factory=lambda: datetime.now(UTC))
     modified: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+class Document:
+    """Create a DOCX document from a structured Python object model."""
+
+    def __init__(self, *, title: str = "", creator: str = "memect.docx") -> None:
+        self.sections: list[Section] = [Section(start="nextPage")]
+        self.section = self.sections[0]
+        self._attach_document_refs(self.section)
+        self.defaults = DocumentDefaults()
+        self.properties = DocumentProperties(title=title, creator=creator)
+        self.paragraph_styles: dict[str, ParagraphStyle] = {}
+        self.styles = self.paragraph_styles
+        self.table_styles: dict[str, TableStyle] = {}
+        self._next_image_id = 1
+        self.footnotes: list[Footnote] = []
+        self._next_footnote_id = 1
+
+    def add_section(
+        self,
+        *,
+        start: str = "nextPage",
+        columns: int = 1,
+        column_space: Length | int | float = 36,
+        column_widths: list[Length | int | float] | None = None,
+        equal_width: bool = True,
+        page_width: Length | int | float | None = None,
+        page_height: Length | int | float | None = None,
+        orientation: str | None = None,
+        margins: SectionMargins | None = None,
+    ) -> Section:
+        if start not in ("nextPage", "continuous", "evenPage", "oddPage", "nextColumn"):
+            raise ValueError("Invalid section start type")
+        if columns < 1:
+            raise ValueError("columns must be positive")
+        if orientation is not None and orientation not in ("portrait", "landscape"):
+            raise ValueError("orientation must be 'portrait' or 'landscape'")
+        if column_widths is not None and len(column_widths) != columns:
+            raise ValueError("column_widths length must match columns")
+        if column_widths is not None and columns == 1:
+            raise ValueError("column_widths requires columns > 1")
+        base = self.section
+        _validate_section_columns(
+            columns=columns,
+            column_space=column_space,
+            column_widths=column_widths,
+            page_width=base.page_width if page_width is None else page_width,
+            margins=base.margins if margins is None else margins,
+        )
+        section = Section(
+            start=start,
+            columns=columns,
+            column_space=column_space,
+            column_widths=list(column_widths) if column_widths is not None else None,
+            equal_width=equal_width if column_widths is None else False,
+            page_width=base.page_width if page_width is None else page_width,
+            page_height=base.page_height if page_height is None else page_height,
+            margins=base.margins if margins is None else margins,
+            orientation=base.orientation if orientation is None else orientation,
+        )
+        self._attach_document_refs(section)
+        self.sections.append(section)
+        self.section = section
+        return section
+
+    def create_footnote(self, text: str = "") -> Footnote:
+        footnote = Footnote(footnote_id=self._next_footnote_id)
+        footnote.document = self
+        self._next_footnote_id += 1
+        self.footnotes.append(footnote)
+        if text:
+            footnote.add_paragraph(text)
+        return footnote
+
+    def create_picture(
+        self,
+        source: str | Path | bytes,
+        *,
+        width: Length | int | float | None = None,
+        height: Length | int | float | None = None,
+        alt_text: str = "",
+    ) -> Picture:
+        from .media import load_picture
+
+        picture = load_picture(
+            source,
+            image_id=self._next_image_id,
+            width=width,
+            height=height,
+            alt_text=alt_text,
+        )
+        self._next_image_id += 1
+        return picture
+
+    def set_default_font(
+        self,
+        *,
+        font: str | None = None,
+        east_asia_font: str | None = None,
+        size: Length | int | float | None = None,
+        color: str | None = None,
+    ) -> Document:
+        if font is not None:
+            self.defaults.font = font
+        if east_asia_font is not None:
+            self.defaults.east_asia_font = east_asia_font
+        if size is not None:
+            self.defaults.size = size
+        if color is not None:
+            self.defaults.color = color
+        return self
+
+    def add_paragraph_style(
+        self,
+        style_id: str,
+        *,
+        name: str | None = None,
+        based_on: str = "Normal",
+        next_style: str | None = None,
+        font: str | None = None,
+        east_asia_font: str | None = None,
+        size: Length | int | float | None = None,
+        bold: bool | None = None,
+        italic: bool | None = None,
+        color: str | None = None,
+        alignment: Alignment | None = None,
+        space_before: Length | int | float | None = None,
+        space_after: Length | int | float | None = None,
+        outline_level: int | None = None,
+    ) -> ParagraphStyle:
+        if outline_level is not None and (outline_level < 0 or outline_level > 8):
+            raise ValueError("outline_level must be between 0 and 8")
+        style = ParagraphStyle(
+            style_id=style_id,
+            name=name,
+            based_on=based_on,
+            next_style=next_style,
+            font=font,
+            east_asia_font=east_asia_font,
+            size=size,
+            bold=bold,
+            italic=italic,
+            color=color,
+            alignment=alignment,
+            space_before=space_before,
+            space_after=space_after,
+            outline_level=outline_level,
+        )
+        self.paragraph_styles[style_id] = style
+        return style
+
+    def add_table_style(
+        self,
+        style_id: str,
+        *,
+        name: str | None = None,
+        based_on: str = "TableNormal",
+        header_shading: str | None = None,
+        banded_rows: ShadingPair | None = None,
+        banded_columns: ShadingPair | None = None,
+        first_column_shading: str | None = None,
+        last_column_shading: str | None = None,
+    ) -> TableStyle:
+        style = TableStyle(
+            style_id=style_id,
+            name=name,
+            based_on=based_on,
+            header_shading=header_shading,
+            banded_row_shading=banded_rows,
+            banded_column_shading=banded_columns,
+            first_column_shading=first_column_shading,
+            last_column_shading=last_column_shading,
+        )
+        self.table_styles[style_id] = style
+        return style
+
+    def to_bytes(self) -> bytes:
+        from .ooxml import build_package
+
+        return build_package(self)
+
+    def save(self, path: str | Path) -> None:
+        out_path = Path(path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(self.to_bytes())
+
+    def _attach_document_refs(self, section: Section) -> None:
+        section.document = self
+        section.header.document = self
+        section.footer.document = self
+        section.first_header.document = self
+        section.first_footer.document = self
+        section.even_header.document = self
+        section.even_footer.document = self

@@ -4,10 +4,10 @@ The implementation writes WordprocessingML directly and only depends on
 ``lxml`` plus the Python standard library.
 """
 
-from .document import Document
 from .errors import DocxError, UnsupportedImageError, ValidationError
 from .model import (
     Caption,
+    Document,
     DocumentDefaults,
     HeaderFooter,
     Paragraph,

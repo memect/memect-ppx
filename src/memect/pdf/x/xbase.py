@@ -19,6 +19,7 @@ from memect.pdf.base import (
     KFormula,
     KObject,
     KPage,
+    KPageHeader,
     KTable,
     KText,
 )
@@ -431,6 +432,17 @@ class XSection:
                     pass
         return False
 
+
+    @property
+    def pages(self)->list[KPage]:
+        pages:list[KPage]=[]
+        for xobj in self.xobjects:
+            for page in xobj.pages:
+                if page not in pages:
+                    pages.append(page)
+        pages.sort(key=lambda page:page.number)
+        return pages
+    
     @classmethod
     def from_object(cls,xobj:'XObject')->Self:
         assert len(xobj.objects)>0
