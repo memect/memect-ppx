@@ -26,14 +26,12 @@ dependencies = [
     "orjson>=3.11.7",
     #"pdf-oxide>=0.3.17",
     "pillow>=12.1.1",
-    "pptx-ea-font>=0.0.4",
     "pydantic>=2.12.5",
     "pymupdf>=1.27.2",
     "pypdf>=6.9.1",
     "python-multipart>=0.0.22",
-    "python-pptx>=1.0.2",
     "rapid-layout>=1.2.1",
-    "rapidocr>=3.8.1",
+    #"rapidocr>=3.8.1",
     "rich>=14.3.3",
     "shapely>=2.1.2",
     "typer>=0.24.1",
@@ -51,7 +49,11 @@ dependencies = [
     "huggingface_hub",
     "modelscope",
     "anthropic",
-    "tokenizers>=0.22.2"
+    "tokenizers>=0.22.2",
+
+    #
+    "types-lxml",
+    "lxml",
 ]
 
 [project.urls]

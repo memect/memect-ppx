@@ -1,0 +1,76 @@
+services:
+  ppx:
+    image: ${PPX_IMAGE:-ppx:local}
+    build:
+      context: .
+      args:
+        PPX_GPU: ${PPX_GPU:-no}
+        PPX_DOWNLOAD_MODELS: ${PPX_DOWNLOAD_MODELS:-0}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-}
+        PPX_ONNXRUNTIME_GPU_VERSION: ${PPX_ONNXRUNTIME_GPU_VERSION:-1.23.2}
+    ports:
+      - "${PPX_PORT:-9527}:9527"
+    volumes:
+      - ${PPX_DATA_DIR_HOST:-./data}:/app/data
+      - ${PPX_LOG_DIR_HOST:-./logs}:/app/logs
+      - ${PPX_CONF_DIR_HOST:-./conf}:/app/conf:ro
+    environment:
+      RUNNING_IN_DOCKER: "1"
+      PPX_LOG_LEVEL: ${PPX_LOG_LEVEL:-INFO}
+      PPX_CPU: ${PPX_CPU:-}
+      PPX_FORMULA: ${PPX_FORMULA:-formula-pp}
+      PPX_DEEPSEEK_URL: ${PPX_DEEPSEEK_URL:-http://host.docker.internal:4000/v1}
+      PPX_DEEPSEEK_SIZE: ${PPX_DEEPSEEK_SIZE:-10}
+      PPX_PADDLE_URL: ${PPX_PADDLE_URL:-http://host.docker.internal:4001/v1}
+      PPX_PADDLE_SIZE: ${PPX_PADDLE_SIZE:-10}
+      PPX_GLM_URL: ${PPX_GLM_URL:-http://host.docker.internal:4002/v1}
+      PPX_GLM_SIZE: ${PPX_GLM_SIZE:-10}
+      PPX_BAIDU_URL: ${PPX_BAIDU_URL:-http://host.docker.internal:4003/v1}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  ppx-gpu:
+    profiles:
+      - gpu
+    image: ${PPX_GPU_IMAGE:-hub.wenyinhulian.cn/docparser/ppx-gpu:260702}
+    build:
+      context: .
+      args:
+        PPX_GPU: cuda
+        PPX_DOWNLOAD_MODELS: ${PPX_DOWNLOAD_MODELS:-0}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-}
+        PPX_ONNXRUNTIME_GPU_VERSION: ${PPX_ONNXRUNTIME_GPU_VERSION:-1.23.2}
+    gpus:
+      - driver: nvidia
+        device_ids:
+          - ${PPX_GPU_DEVICE_ID:-0}
+        capabilities:
+          - gpu
+    ports:
+      - "${PPX_GPU_PORT:-9528}:9527"
+    volumes:
+      - ${PPX_DATA_DIR_HOST:-./data}:/app/data
+      - ${PPX_LOG_DIR_HOST:-./logs}:/app/logs
+      - ${PPX_CONF_DIR_HOST:-./conf}:/app/conf:ro
+    environment:
+      RUNNING_IN_DOCKER: "1"
+      PPX_LOG_LEVEL: ${PPX_LOG_LEVEL:-INFO}
+      PPX_CPU: ${PPX_CPU:-}
+      PPX_FORMULA: ${PPX_FORMULA:-formula-pp}
+      PPX_DEEPSEEK_URL: ${PPX_DEEPSEEK_URL:-http://host.docker.internal:4000/v1}
+      PPX_DEEPSEEK_SIZE: ${PPX_DEEPSEEK_SIZE:-10}
+      PPX_PADDLE_URL: ${PPX_PADDLE_URL:-http://host.docker.internal:4001/v1}
+      PPX_PADDLE_SIZE: ${PPX_PADDLE_SIZE:-10}
+      PPX_GLM_URL: ${PPX_GLM_URL:-http://host.docker.internal:4002/v1}
+      PPX_GLM_SIZE: ${PPX_GLM_SIZE:-10}
+      PPX_BAIDU_URL: ${PPX_BAIDU_URL:-http://host.docker.internal:4003/v1}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      NVIDIA_VISIBLE_DEVICES: ${PPX_GPU_DEVICE_ID:-0}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

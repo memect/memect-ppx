@@ -163,6 +163,7 @@ const bgInput = document.getElementById('bg-input')
 const layoutInput = document.getElementById('layout-input')
 const showPageNumberInput = document.getElementById('show-page-number-input')
 const showPageSectionInput = document.getElementById('show-page-section-input')
+const showTableColorInput = document.getElementById('show-table-color-input')
 const treeFilterInput = document.getElementById('tree-filter-input')
 const viewer = document.querySelector('.viewer')
 let tree = null
@@ -259,6 +260,22 @@ function bindInputs() {
             }
 
         }
+    })
+
+    showTableColorInput.addEventListener('change',()=>{
+        const showBgColor = showTableColorInput.checked
+        //获得所有的表格，设置单元格的颜色，如果有的
+            for(const table of document.querySelector('.doc').querySelectorAll('.body table')){
+                for(const td of table.querySelectorAll('td')){
+                    let color = td.dataset['color']||'#ffffff'
+                    if(!showBgColor){
+                        color=''
+                    }else{
+                        
+                    }
+                    td.style.backgroundColor=color
+                }
+            }
     })
 }
 

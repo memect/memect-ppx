@@ -221,6 +221,28 @@
             }
         }
 
+        .page[data-type="image"] {
+            outline-color: #81d784;
+        }
+
+        .page[data-type="pdf"] {}
+
+        .page[data-type="hybrid"] {
+            outline-color: #8e78e0;
+        }
+
+        .header{
+            position: absolute;
+            box-sizing: border-box;
+            outline: 2px solid lightgray;
+        }
+
+        .footer{
+            position: absolute;
+            box-sizing: border-box;
+            outline: 2px solid lightgray;
+        }
+
         .page-number {
             display: none;
             position: absolute;
@@ -259,8 +281,13 @@
                 }
             }
 
-            &[data-subtype="wbk"] >tbody > tr > td {
+            &[data-subtype="wbk"]>tbody>tr>td {
                 border-style: dashed;
+            }
+
+            &[data-subtype="layout"]>tbody>tr>td {
+                border-style: dashed;
+                border-color: #1d4ed8;
             }
 
             &:hover {
@@ -271,11 +298,11 @@
                 background-color: #81d784;
             }
 
-            &[data-merged] td[data-cell-merged="true"]{
+            &[data-merged] td[data-cell-merged="true"] {
                 background-color: lightblue;
             }
 
-            & td:hover{
+            & td:hover {
                 background-color: #ccc;
             }
         }
@@ -311,6 +338,10 @@
             font-family: var(--font-mono);
             font-size: 10px;
             overflow: hidden;
+
+            &:hover {
+                outline: 2px solid sandybrown;
+            }
         }
 
 
@@ -382,8 +413,8 @@
         .footnote {
             position: absolute;
             box-sizing: border-box;
-            outline:dotted blue 2px;
-            
+            outline: dotted blue 2px;
+
         }
 
         .unknown {
@@ -425,7 +456,7 @@
 
         [data-merged] {
             outline-style: dashed !important;
-            outline-color: yellow ;
+            outline-color: yellow;
         }
     </style>
 
@@ -556,7 +587,10 @@
                 <label><input type="checkbox" id="show-page-section-input">分栏</label>
             </div>
             <div class="toolbar-show-page-number">
-                <label><input type="checkbox" id="show-page-number-input"> 页码</label>
+                <label><input type="checkbox" id="show-page-number-input">页码</label>
+            </div>
+            <div class="toolbar-show-table-color">
+                <label><input type="checkbox" id="show-table-color-input">表格颜色</label>
             </div>
         </div>
         <div class="workspace">

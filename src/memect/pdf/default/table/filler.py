@@ -32,11 +32,11 @@ class TableFiller:
     def __init__(self):
         super().__init__()
     
-    def get_objects(self,vobj:VObject)->Result:
+    def _get_objects(self,vobj:VObject,page_pdf_chars:list[KChar],page_pdf_figures:list[KPDFFigure],remove:bool=False)->Result:
         bbox = vobj.bbox
-        page = vobj.page
-        pdf_chars = bbox.get(page.pdf_chars,ratio=0.7)
-        pdf_figures = bbox.get(page.pdf_figures,ratio=0.7)
+        #page = vobj.page
+        pdf_chars = bbox.get(page_pdf_chars,ratio=0.7,remove=remove)
+        pdf_figures = bbox.get(page_pdf_figures,ratio=0.7,remove=remove)
         ocr_chars = vobj.ocr_chars
         #TODO 现在这些先全部作为图片处理
         #如果将来需要再进一步解析，可以在这里处理，也可以在外边先批量处理，存储下来再使用
@@ -59,14 +59,40 @@ class TableFiller:
             removed_chars=removed_chars,
             removed_pdf_figures=removed_pdf_figures
         )
+    
+    def get_objects(self,vobjs:Sequence[VObject])->Result:
+        assert len(vobjs)>0
+        page = vobjs[0].page
+        if len(vobjs)==1:
+            return self._get_objects(vobjs[0],page.pdf_chars,page.pdf_figures,remove=False)
+        
+        #为了避免多个对象可能使用了重叠的字符和图片，这里复制然后删除用过的
+        pdf_chars=list(page.pdf_chars)
+        pdf_figures = list(page.pdf_figures)
+        results:list[Result]=[]
+        for vobj in vobjs:
+            results.append(self._get_objects(vobj,pdf_chars,pdf_figures,remove=True))
+        
+        return Result(
+            pdf_chars=lists.join([r.pdf_chars for r in results]),
+            ocr_chars=lists.join([r.ocr_chars for r in results]),
+            pdf_figures=lists.join([r.pdf_figures for r in results]),
+            chars=lists.join([r.chars for r in results]),
+            vobjects=lists.join([r.vobjects for r in results]),
+            removed_chars=lists.join([r.removed_chars for r in results]),
+            removed_pdf_figures=lists.join([r.removed_pdf_figures for r in results])
+        )
+
+    
+
 
     def fill(self,table:KTable,result:Result|None=None)->Result:
-        assert table.vobject is not None
-        #debugger = self._debugger.bind(page=table.page.number)
-        vobj = table.vobject
-        #page = table.page
         if result is None:
-            result = self.get_objects(vobj)
+            assert table.vobject is not None
+            #debugger = self._debugger.bind(page=table.page.number)
+            vobj = table.vobject
+            #page = table.page
+            result = self.get_objects([vobj])
         objs:list[KObject|VObject]=[]
         objs.extend(result.chars)
         if len(result.pdf_figures)>0:

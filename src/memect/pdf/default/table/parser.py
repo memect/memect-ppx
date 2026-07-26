@@ -64,6 +64,12 @@ class TableParser:
         else:
             raise ValueError(f"不支持的表格mode={doc.params.table}")
 
+    
+    def xparse(self,doc:KDocument,max_workers:int=0):
+        """跨页/跨列表格合并的预处理"""
+        from .wbk import XParser
+        XParser(self._manager).parse(doc)
+    
     def _parse_as_figures(self, doc: KDocument, *, max_workers: int = 0):
         def parse_page(page: KPage):
             for vobj in page.vobjects:

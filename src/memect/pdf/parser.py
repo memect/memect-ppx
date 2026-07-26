@@ -22,6 +22,7 @@ from memect.base import utils
 from memect.base.config import MPInit, get_settings
 from memect.base.task import Runner, StoppedError, Task
 from memect.base.utils import MyBaseModel, SafeExecutor
+from memect.pdf.llm.baidu import Baidu, BaiduArgs
 from memect.pdf.x.xtree import XTreeParser, XTreeParserArgs
 
 from .base import Backend, KDocument, KDocumentFactory, ParseMode
@@ -32,6 +33,7 @@ from .llm.paddle import Paddle, PaddleArgs
 from .model import ModelManager, ModelManagerArgs
 from .pdf2image import Pdf2Image, Pdf2ImageArgs
 from .watermark import Watermark
+from .style import TableStyleParser
 
 
 class ParserArgs(MyBaseModel):
@@ -39,6 +41,7 @@ class ParserArgs(MyBaseModel):
     deepseek: DeepseekArgs = Field(default_factory=DeepseekArgs)
     paddle: PaddleArgs = Field(default_factory=PaddleArgs)
     glm: GLMArgs = Field(default_factory=GLMArgs)
+    baidu:BaiduArgs=Field(default_factory=BaiduArgs)
     default: DefaultParserArgs = Field(default_factory=DefaultParserArgs)
     tree: XTreeParserArgs = Field(default_factory=XTreeParserArgs)
 
@@ -65,14 +68,18 @@ class Parser:
         args = ParserArgs.create(args)
         self._pdf2image = Pdf2Image(args.pdf2image)
         self._deepseek = Deepseek(args.deepseek)
+        self._baidu = Baidu(args.baidu)
         self._paddle = Paddle(self._manager, args.paddle)
         self._glm = GLM(self._manager, args.glm)
         self._default = DefaultParser(self._manager, args.default)
         self._watermark = Watermark()
         #==============
         self._tree_parser = XTreeParser(args.tree)
+        self._table_style_parser = TableStyleParser()
 
     def parse(self, doc: KDocument, *, runner: Runner | None = None):
+        #TODO 暂时如此设置
+        doc.manager = self._manager
         try:
 
             def check_running(name: str):
@@ -108,26 +115,29 @@ class Parser:
                 self._paddle.parse(doc)
             elif backend == Backend.GLM:
                 self._glm.parse(doc)
+            elif backend == Backend.BAIDU:
+                self._baidu.parse(doc)
             elif backend == Backend.DEFAULT:
                 self._default.parse(doc)
             else:
                 raise ValueError(f"不支持的backend={backend}")
-            
 
             if doc.params.mode==ParseMode.TREE:
                 self._tree_parser.parse(doc)
 
+            #统一在这里设置style？
+            self._table_style_parser.parse(doc)
+
+
             # 解析完毕，按要求输出
             if doc.params.pptx:
-                from .pptx import PptxBuilder
-
+                from memect.pptx.builder import Builder
                 # pptx总是按页渲染，即使要求解析tree
-                data = PptxBuilder().build(doc)
+                data = Builder().build(doc)
                 doc.write("doc.pptx", data)
 
             if doc.params.docx:
-                from .docx import DocxBuilder
-
+                from memect.docx.builder import DocxBuilder
                 data = DocxBuilder().build(doc)
                 doc.write("doc.docx", data)
 
