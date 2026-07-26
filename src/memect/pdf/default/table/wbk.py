@@ -19,6 +19,7 @@ from memect.pdf.base import (
     KLine,
     KObject,
     KPage,
+    KPDFFigure,
     KTable,
     KText,
     VObject,
