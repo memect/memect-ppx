@@ -28,7 +28,7 @@ def page_count(file: str | Path | bytes) -> int:
 
     def use_pymupdf():
         try:
-            import pymupdf # type: ignore
+            import pymupdf  # type: ignore
             return True
         except ImportError:
             return False

@@ -8,6 +8,7 @@ from memect.base.bbox import BBox
 from memect.base.pattern import XPattern
 from memect.base.debug import XDebugger
 from memect.pdf.base import (
+    ChartLayout,
     Group,
     KBlock,
     KCell,
@@ -86,6 +87,8 @@ class BlockParser:
             r"(表|图|图表)[0-9]+.+",
             r"(表|图|图表)[一二三四五六七八九十]+.+",
             r"(表|图|图表)[:].+",
+            # 2017年我国地下水水质情况
+            r"[0-9]{4}年.+情况",
         ],
     )
     _title_pattern2: Final = XPattern(
@@ -160,7 +163,7 @@ class BlockParser:
 
         # 再处理跨页的情况，可能需要参考前后页
         for page in doc.working_pages:
-            # self._parse_page2(page)
+            self._parse_page2(page)
             pass
 
     def parse2(self, doc: KDocument):
@@ -332,6 +335,8 @@ class BlockParser:
         raw_objects = tuple(page.objects)
         remain_objects = list(page.objects)
         remain_objects.sort(key=lambda obj: obj.bbox.y1, reverse=True)
+        # 先进行一个修正，如：text='图表1xxx 图表2xxxx' => ['','']
+        self._fix_texts(remain_objects)
         parts: list[Part] = []
         for obj in remain_objects[:]:
             if obj not in remain_objects:
@@ -348,6 +353,8 @@ class BlockParser:
         page.objects.extend(remain_objects)
         page.objects.extend(tables)
         page.objects.extend(blocks)
+        # 简单排序
+        page.objects.sort(key=lambda obj: obj.bbox.y1, reverse=True)
 
         if debugger.allow("draw"):
             page.draw(
@@ -380,40 +387,59 @@ class BlockParser:
 
         debugger: Final = self._debugger.bind(page=page.number)
 
-        def is_title(text: Text) -> bool:
+        def is_title(text: KText) -> bool:
             if self._title_pattern.fullmatch(text.text2) is not None:
                 return True
             else:
                 return False
 
-        def is_source(text: Text) -> bool:
+        def is_source(text: KText) -> bool:
             # TODO 如果只是部分内容？
             if self._source_pattern.fullmatch(text.text2) is not None:
                 return True
             else:
                 return False
 
-        def find_table(page: Page, dir: Literal["next", "prev"]) -> Table | None:
-            # TODO 严格的需要先判断页面大小是否一致？对于奇葩的表格，也可能不一致
-            if (
-                dir == "next"
-                and page.next_page is not None
-                and page.next_page.body.objects
-                and isinstance(page.next_page.body.objects[0], Table)
-            ):
-                # TODO 可以判断是否为title/figure/source表格
-                return cast(Table, page.next_page.body.objects[0])
-            elif (
-                dir == "prev"
-                and page.prev_page is not None
-                and page.prev_page.body.objects
-                and isinstance(page.prev_page.body.objects[-1], Table)
-            ):
-                return cast(Table, page.prev_page.body.objects[-1])
+        def get_table(page: KPage, index: int) -> KTable | None:
+            objects = sorted(page.objects, key=lambda obj: obj.bbox.y1, reverse=True)
+            if not objects:
+                return None
+            obj = objects[index]
+            if isinstance(obj, KTable) and obj.chart_layout is not None:
+                # TODO 还需要判断是否为图表布局表格
+                if index==0 and obj.chart_layout.title:
+                    #已经有title
+                    return None
+                elif index==-1 and obj.chart_layout.source:
+                    #已经有来源
+                    return None
+                else:
+                    return obj
             else:
                 return None
 
-        def find_bottom_titles(page: Page, strict: bool = True):
+        def find_table(page: KPage, dir: Literal["next", "prev"]) -> KTable | None:
+            # TODO 严格的需要先判断页面大小是否一致？对于奇葩的表格，也可能不一致
+            next_page = page.doc.get_working_page(page.number + 1)
+            prev_page = page.doc.get_working_page(page.number - 1)
+
+            if (
+                dir == "next"
+                and next_page is not None
+                and abs(page.width - next_page.width) <= 2
+            ):
+                # TODO 可以判断是否为title/figure/source表格
+                return get_table(next_page, 0)
+            elif (
+                dir == "prev"
+                and prev_page is not None
+                and abs(page.width - prev_page.width) <= 2
+            ):
+                return get_table(prev_page, -1)
+            else:
+                return None
+
+        def find_titles(page: KPage, strict: bool = True):
             # 如果没有分栏，如下查找是正确的
             # 在页面的底部，找到如下：没有图片的
             # [title][title]     =>需要理解为表格
@@ -424,21 +450,21 @@ class BlockParser:
             # [xxxxx]|[figure]
             # [title]|
 
-            lines = Sorter.get_lines(page.body.objects)
+            lines = Sorter.get_lines(page.objects)
             if len(lines) < 1:
                 return
 
             # 取最后一行，且应该为Text
             line = lines[-1]
-            if not all(isinstance(obj, Text) for obj in line):
+            if not all(isinstance(obj, KText) for obj in line):
                 return
 
-            line = cast(list[Text], line)
+            line = cast(list[KText], line)
             parts: list[Part] = []
             for text in line:
                 # 判断是否为标题
                 if is_title(text):
-                    part = Part(page, "title", titles=[text])
+                    part = Part(page, text.bbox, "title", titles=[text])
                     parts.append(part)
                 else:
                     break
@@ -464,8 +490,10 @@ class BlockParser:
                     # 或者根据模式找到n个标题？
                     i = get_max_distance_index(text)
                     if i > 0:
-                        t1 = text.select(0, i)
-                        t2 = text.select(i)
+                        t1 = KText.from_objects(text.objects[0:i])
+                        t2 = KText.from_objects(text.objects[i:])
+                        assert t1 is not None
+                        assert t2 is not None
                         if is_title(t1) and is_title(t2):
                             self._logger.warning(
                                 "cut title,page=%s,title1=%s,title2=%s",
@@ -474,8 +502,8 @@ class BlockParser:
                                 t2.text,
                             )
                             parts = [
-                                Part(page, "title", titles=[t1]),
-                                Part(page, "title", titles=[t2]),
+                                Part(page, t1.bbox, "title", titles=[t1]),
+                                Part(page, t2.bbox, "title", titles=[t2]),
                             ]
 
                 if next_table.col_num != len(parts):
@@ -486,25 +514,33 @@ class BlockParser:
             # 如果有2个标题的，还需要判断下一页吗？
             # 可以根据这2个对齐？暂时不需要了，跨页的时候再处理？
             table = self._make_table(page, parts)
-            page.body.remove(line)
-            page.body.add([table])
+            if next_table is not None and next_table.bbox.over("x", table.bbox, d=20):
+                # TODO 需要考虑在没有分栏的情况下，所以限制为2
+                x0 = min(table.bbox.x0, next_table.bbox.x0)
+                x1 = max(table.bbox.x1, next_table.bbox.x1)
+                table.adjust(x0=x0, x1=x1)
+                next_table.adjust(x0=x0, x1=x1)
+
+            k = page.objects.index(line[0])
+            page.objects.insert(k, table)
+            lists.remove(page.objects, line)
 
             if debugger.allow("gui"):
-                table.show("bottom table")
+                pass
 
-        def find_top_sources(page: Page, strict: bool = True):
-            lines = Sorter.get_lines(page.body.objects)
+        def find_sources(page: KPage, strict: bool = True):
+            lines = Sorter.get_lines(page.objects)
             if len(lines) < 1:
                 return
 
             line = lines[0]
-            if not all(isinstance(t, Text) for t in line):
+            if not all(isinstance(t, KText) for t in line):
                 return
 
             parts: list[Part] = []
             for text in line:
                 if is_source(text):
-                    part = Part(page, "source", sources=[text])
+                    part = Part(page, text.bbox, "source", sources=[text])
                     parts.append(part)
                 else:
                     break
@@ -519,13 +555,21 @@ class BlockParser:
 
             # json2doc/report/13.pdf 27-28
             table = self._make_table(page, parts)
-            page.body.remove(line)
-            page.body.add([table])
+            if prev_table is not None and prev_table.bbox.over("x", table.bbox, d=20):
+                # TODO 需要考虑在没有分栏的情况下，所以限制为2
+                x0 = min(table.bbox.x0, prev_table.bbox.x0)
+                x1 = max(table.bbox.x1, prev_table.bbox.x1)
+                table.adjust(x0=x0, x1=x1)
+                prev_table.adjust(x0=x0, x1=x1)
+
+            k = page.objects.index(line[0])
+            page.objects.insert(k, table)
+            lists.remove(page.objects, line)
 
             if debugger.allow("gui"):
-                table.show("top table")
+                pass
 
-        def get_max_distance_index(text: Text) -> int:
+        def get_max_distance_index(text: KText) -> int:
             values: list[tuple[int, float]] = []
             for i in range(1, len(text.objects)):
                 obj1 = text.objects[i - 1]
@@ -541,12 +585,57 @@ class BlockParser:
             else:
                 return -1
 
-        find_bottom_titles(page)
-        find_top_sources(page)
+        find_titles(page)
+        find_sources(page)
         # page.body.sort()
         if debugger.allow("draw"):
             # page.show('final body',objects=page.body.objects)
             pass
+
+    def _fix_texts(self, objs: list[KObject]):
+        def fix(text: KText)->list[KText]|None:
+            if len(text.lines) != 1 or len(text.chars)!=len(text.objects):
+                return None
+            # 通用正则：匹配所有 "图表 数字" 开头的标题（支持标题内包含空格）
+            pattern = r'(图表\s*[\d一二三四五六七八九十]+\s*[:：]?\s*.*?)(?=图表\s*[\d一二三四五六七八九十]+|$)'
+
+            # 使用 finditer 获取每个匹配的位置信息
+            matches:list[Any] = []
+            for match in re.finditer(pattern, text.text, re.DOTALL):
+                start = match.start()
+                end = match.end()
+                content = match.group(1).strip()
+                matches.append({
+                    'start': start,
+                    'end': end,
+                    'content': content,
+                    'length': end - start
+                })
+            if len(matches)<=1:
+                return None
+            
+            
+            texts:list[KText]=[]
+            for m in matches:
+                t1 = KText.from_objects(text.chars[m['start']:m['end']])
+                assert t1 is not None
+                texts.append(t1)
+            return texts
+
+        i = 0
+        while i < len(objs):
+            obj = objs[i]
+            if isinstance(obj, KText):
+                new_texts=fix(obj)
+                if new_texts and len(new_texts)>1:
+                    self._logger.warning('第%s页，标题切分为多个,raw_title=%s,new_titles=%s',obj.page.number,obj.text,[t.text for t in new_texts])
+                    lists.insert(objs,i+1,new_texts)
+                    del objs[i]
+                    i+=len(new_texts)
+                else:
+                    i+=1
+            else:
+                i += 1
 
     def _find_texts(
         self,
@@ -720,85 +809,95 @@ class BlockParser:
         # json2doc/report/6.pdf 11页等
         tables: list[KTable] = []
 
-        def is_continue(i:int,j:int)->bool:
-            if i+1==j:
+        def is_continue(i: int, j: int) -> bool:
+            if i + 1 == j:
                 return True
-            elif j-i<=0:
+            elif j - i <= 0:
                 return False
             else:
-                chars = page.pdf_chars[i+1:j]
-                #print('chars=',[c.text for c in chars])
+                chars = page.pdf_chars[i + 1 : j]
+                # print('chars=',[c.text for c in chars])
                 if all(c.text.isspace() for c in chars):
                     return True
                 else:
                     return False
-                
-        def get_below_object(part:Part):
-            for obj in sorted(objects,key=lambda obj:obj.bbox.y1,reverse=True):
-                if obj.bbox.y1<=min(part.bbox.y0+10,part.bbox.y1) and obj.bbox.over('x',part.bbox,d=20):
-                    #[-part-]|[-part-]
-                    #[-obj-] |[-obj-]
+
+        def get_below_object(part: Part):
+            for obj in sorted(objects, key=lambda obj: obj.bbox.y1, reverse=True):
+                if obj.bbox.y1 <= min(
+                    part.bbox.y0 + 10, part.bbox.y1
+                ) and obj.bbox.over("x", part.bbox, d=20):
+                    # [-part-]|[-part-]
+                    # [-obj-] |[-obj-]
                     return obj
             return None
-        
-        def get_last_char(part:Part)->KChar|None:
+
+        def get_last_char(part: Part) -> KChar | None:
             block = part.make_block()
-            if block.objects and isinstance(block.objects[-1],KText):
+            if block.objects and isinstance(block.objects[-1], KText):
                 text = block.objects[-1]
-                if text.objects and isinstance(text.objects[-1],KChar):
+                if text.objects and isinstance(text.objects[-1], KChar):
                     return text.objects[-1]
             return None
-        
-        def case1(line:list[Part])->bool:
-            #local/cases/json2doc/layout/footnote/3-1.pdf 第14页
-            #复杂的情况，存在分栏，情况就复杂了，可能为
-            #text1|text2
-            #part1|part2 =>为一个整体
-            #或者
-            #text1|text2
-            #part1|part2  => [text1,part1] -> [text2,part2]
 
-            #如何判断？
-            #text1|text3
-            #part1|part2
-            #text2|text4   => 如果有text2且text2后到text3，part1和part2就是分开的，对于这种，目前仅仅支持pdf解析
+        def case1(line: list[Part]) -> bool:
+            # local/cases/json2doc/layout/footnote/3-1.pdf 第14页
+            # 复杂的情况，存在分栏，情况就复杂了，可能为
+            # text1|text2
+            # part1|part2 =>为一个整体
+            # 或者
+            # text1|text2
+            # part1|part2  => [text1,part1] -> [text2,part2]
+
+            # 如何判断？
+            # text1|text3
+            # part1|part2
+            # text2|text4   => 如果有text2且text2后到text3，part1和part2就是分开的，对于这种，目前仅仅支持pdf解析
             #              => 如果有text2且text2后到text4，part1和part2就是合并的
 
-            if len(line)!=2:
+            if len(line) != 2:
                 return False
-            
+
             part1 = line[0]
             part2 = line[1]
             obj1 = get_below_object(part1)
             obj2 = get_below_object(part2)
             if obj1 is obj2:
-                #[part1]|[part2]  =>可以合并
-                #---obj1--------
+                # [part1]|[part2]  =>可以合并
+                # ---obj1--------
                 return False
-            
-            if isinstance(obj1,KText) and isinstance(obj2,KText) and len(obj1.objects)>0 and len(obj2.objects)>0: 
-                #[obj1]|[obj2]
-                #简单的判断书写顺序
-                c1=obj1.objects[0]
-                c2=obj2.objects[0]
 
-                if isinstance(c1,KChar) and isinstance(c2,KChar):
+            if (
+                isinstance(obj1, KText)
+                and isinstance(obj2, KText)
+                and len(obj1.objects) > 0
+                and len(obj2.objects) > 0
+            ):
+                # [obj1]|[obj2]
+                # 简单的判断书写顺序
+                c1 = obj1.objects[0]
+                c2 = obj2.objects[0]
+
+                if isinstance(c1, KChar) and isinstance(c2, KChar):
                     k1 = c1.index
                     k2 = c2.index
-                    
-                    if k1!=-1 and k2!=-1:
+
+                    if k1 != -1 and k2 != -1:
                         c3 = get_last_char(part1)
                         c4 = get_last_char(part2)
                         k3 = c3.index if c3 else -1
                         k4 = c4.index if c4 else -1
-                        
-                        if k3!=-1 and k4!=-1 and is_continue(k3,k1) and is_continue(k4,k2):
+
+                        if (
+                            k3 != -1
+                            and k4 != -1
+                            and is_continue(k3, k1)
+                            and is_continue(k4, k2)
+                        ):
                             parse_lines([[part] for part in line])
                             return True
-            
+
             return False
-            
-            
 
         def parse_lines(lines: list[list[Part]]):
             # 如果是左右分栏，可以在这里就把part给切开了
@@ -862,7 +961,6 @@ class BlockParser:
                     # [figure1][figure2]    => 对齐在一行
                     # [source1][source2]    => 对齐在一行
                     # 如果没有对齐，每个part都作为一个独立的表格
-
 
                     table = self._make_table(
                         page,
@@ -1083,6 +1181,14 @@ class BlockParser:
             if source_num == 1:
                 adjust_row(source_row)
 
+        chart_layout=ChartLayout()
+        if common_title_cell is not None or len(title_row)>0:
+            chart_layout.title=True
+        if common_source_cell is not None or len(source_row)>0:
+            chart_layout.source=True
+        if len(object_row)>0:
+            chart_layout.body=True
+
         if common_title_cell is not None:
             cells.append(common_title_cell)
         cells.extend(title_row)
@@ -1090,8 +1196,8 @@ class BlockParser:
         cells.extend(source_row)
         if common_source_cell is not None:
             cells.append(common_source_cell)
-        table = KTable(page, table_bbox,cells=cells)
-        table.subtype='wbk'
+        table = KTable(page, table_bbox, cells=cells, subtype="wbk")
+        table.chart_layout=chart_layout
         if debugger.allow("info"):
             with debugger.group("cells"):
                 for c in table.cells:
@@ -1108,15 +1214,20 @@ class BlockParser:
         # 目前选择方案1
         for cell in table.cells:
             # 实际上只应该有一个对象，但是目前放宽了，只有包含一个table
-            if len(cell.objects)==1 and isinstance(cell.objects[0],KTable) and cell.objects[0].row_num==1 and cell.objects[0].col_num==1:
-                #可能为一个正常的子表格
-                #也可能是一个柱状图等，但是被错误的识别为表格了
-                #local/cases/test/layout-1.pdf --pages 12
+            if (
+                len(cell.objects) == 1
+                and isinstance(cell.objects[0], KTable)
+                and cell.objects[0].row_num == 1
+                and cell.objects[0].col_num == 1
+            ):
+                # 可能为一个正常的子表格
+                # 也可能是一个柱状图等，但是被错误的识别为表格了
+                # local/cases/test/layout-1.pdf --pages 12
                 figure = page.make_figure(cell.objects[0].quad)
                 assert figure is not None
                 cell.objects.clear()
                 cell.objects.append(figure)
-                self._logger.warning('第%s页，把表格转换为图片',page.number)
+                self._logger.warning("第%s页，把表格转换为图片", page.number)
             pass
 
         table.adjust()
@@ -1153,9 +1264,9 @@ class BlockParser:
             return True
         elif self._invalid_title_pattern.fullmatch(text.text2):
             return False
-        #elif len(text.lines) == 1 and text.is_bold():
-            # 如果是粗体的，也认为是？
-            #return True
+        # elif len(text.lines) == 1 and text.is_bold():
+        # 如果是粗体的，也认为是？
+        # return True
         else:
             return False
 
@@ -1167,9 +1278,7 @@ class BlockParser:
         else:
             return False
 
-    def _is_source(
-        self, text: KText, bbox: BBox, sources: Sequence[KObject]
-    ) -> bool:
+    def _is_source(self, text: KText, bbox: BBox, sources: Sequence[KObject]) -> bool:
         # 可能有多个source（也就是备注）
         # 第一种
         # 数据来源：xxxx
@@ -1214,22 +1323,3 @@ class BlockParser:
             return True
         else:
             return False
-
-
-
-class _Parser1:
-
-    def __init__(self):
-        super().__init__()
-
-class _Parser2:
-    """研报首页的页头部分内容杂乱无章，可以先分成一个block，避免影响阅读顺序"""
-    def __init__(self):
-        super().__init__()
-    
-    def parse(self,doc:KDocument):
-        #TODO 可以使用一个小模型来解决？
-        for page in doc.working_pages:
-            if page.number==1:
-                pass
-        pass

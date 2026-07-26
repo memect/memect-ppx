@@ -1,6 +1,9 @@
 import hashlib
 import logging
+import shutil
+import tarfile
 import threading
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Any, Final
 
@@ -21,39 +24,52 @@ _models: dict[str, Any] = {
         "sha256": "c267cafe004067be73c44cc3aa7990f34e1026c467464372fa6843500f5da1c2",
         "verified": False,
     },
-
-    "mfr":{
-        "huggingface":"breezedeus/pix2text-mfr-1.5",
-        "verified":False
+    # TODO 这两个公式模型后续需要去掉
+    "mfr": {"huggingface": "breezedeus/pix2text-mfr-1.5", "verified": False},
+    "PP-FormulaNet_plus-M_infer": {
+        "modelscope": "Memect/PP-FormulaNet_plus-M_infer",
+        "verified": False,
     },
-
-    "PP-FormulaNet_plus-M_infer":{
-        "modelscope":"Memect/PP-FormulaNet_plus-M_infer",
-        "verified":False
+    "PP-DocLayout-V3": {
+        "modelscope": "PaddlePaddle/PP-DocLayoutV3_onnx",
+        "verified": False,
     },
-
-    #===这些将被遗弃====
-    "formula/encoder.onnx":{
-        "url":"https://modelscope.cn/models/Memect/rapid_latex_ocr/resolve/v1.0.0/encoder.onnx",
-        "sha256":"01bf5dc25539ca0cd5b1bd29296ea495977a6ba5f629dc4178277809d26e5e7d",
-        "verified":False
+    "PP-DocLayout-V2": {
+        "modelscope": "PaddlePaddle/PP-DocLayoutV2_onnx",
+        "verified": False,
     },
-    "formula/decoder.onnx":{
-        "url":"https://modelscope.cn/models/Memect/rapid_latex_ocr/resolve/v1.0.0/decoder.onnx",
-        "sha256":"bd695497bf1b22279b7626f5916c79226e1e244c84355f8da7edfd2d921d0072",
-        "verified":False
+    "PP-DocLayout-L": {
+        "modelscope": "Memect/PP-DocLayout-L",
+        "verified": False,
     },
-    "formula/image_resizer.onnx":{
-        "url":"https://modelscope.cn/models/Memect/rapid_latex_ocr/resolve/v1.0.0/image_resizer.onnx",
-        "sha256":"e0b075c39700f64d50400f39c8fc186bbb3b5d84d31864008313f376603aca9d",
-        "verified":False
+    "PP-DocLayout_plus-L": {
+        "modelscope": "Memect/PP-DocLayout_plus-L",
+        "verified": False,
     },
-    "formula/tokenizer.json":{
-        "url":"https://modelscope.cn/models/Memect/rapid_latex_ocr/resolve/v1.0.0/tokenizer.json",
-        "sha256":"1dc27b18d6a518d0d5ff3f4bb7bd98521fe80ad39e5b2a246d4109f1bb9d5019",
-        "verified":False
+    "PP-OCRv6_tiny_rec_onnx": {
+        "modelscope": "PaddlePaddle/PP-OCRv6_tiny_rec_onnx",
+        "verified": False,
     },
-
+    "PP-OCRv6_tiny_det_onnx": {
+        "modelscope": "PaddlePaddle/PP-OCRv6_tiny_det_onnx",
+        "verified": False,
+    },
+    "PP-OCRv6_small_rec_onnx": {
+        "modelscope": "PaddlePaddle/PP-OCRv6_small_rec_onnx",
+        "verified": False,
+    },
+    "PP-OCRv6_small_det_onnx": {
+        "modelscope": "PaddlePaddle/PP-OCRv6_small_det_onnx",
+        "verified": False,
+    },
+    "PP-OCRv6_medium_rec_onnx": {
+        "modelscope": "PaddlePaddle/PP-OCRv6_medium_rec_onnx",
+        "verified": False,
+    },
+    "PP-OCRv6_medium_det_onnx": {
+        "modelscope": "PaddlePaddle/PP-OCRv6_medium_det_onnx",
+        "verified": False,
+    },
 }
 
 
@@ -62,7 +78,13 @@ def get_model_path(name: str):
     path = Path(__file__).parent.joinpath(name)
     cfg = _models[name]
 
-    def has_model():
+    def has_required_files(directory: Path) -> bool:
+        required = cfg.get("required_files")
+        if not required:
+            return False
+        return all(directory.joinpath(file).is_file() for file in required)
+
+    def check_model():
         if cfg["verified"]:
             return True
 
@@ -75,44 +97,47 @@ def get_model_path(name: str):
             else:
                 logger.warning("模型已经存在但是不完整:%s", name)
                 return False
-        elif path.is_dir() and path.joinpath('_done.txt').is_file():
-            logger.info("模型已经存在:%s", name)
-            cfg['verified']=True
-            return True
-        
+        elif path.is_dir():
+            if path.joinpath("_done.txt").is_file() or has_required_files(path):
+                logger.info("模型已经存在:%s", name)
+                cfg["verified"] = True
+                return True
+
         return False
 
-    #除了第一次，其他模型已经存在了，所以只需要在本地多线程下判断即可
+    # 除了第一次，其他模型已经存在了，所以只需要在本地多线程下判断即可
     with _lock:
-        if has_model():
+        if check_model():
             return path
-        
-    #模型不存在，支持多个进程同时执行的情况
+
+    # 模型不存在，支持多个进程同时执行的情况
     with _download_lock:
-        if has_model():
+        if check_model():
             return path
-        
+
         logger.info("模型不存在，开始下载模型:%s", name)
-        if cfg.get('modelscope'):
+        if cfg.get("modelscope"):
             from modelscope import snapshot_download
-            #TODO 还需要endpoint吗？
-            snapshot_download(cfg.get('modelscope'),local_dir=path)
-            path.joinpath('_done.txt').write_text('ok')
-            cfg['verified']=True
-        elif cfg.get('huggingface'):
+
+            # TODO 还需要endpoint吗？
+            snapshot_download(cfg.get("modelscope"), local_dir=path)
+            path.joinpath("_done.txt").write_text("ok")
+            cfg["verified"] = True
+        elif cfg.get("huggingface"):
             from huggingface_hub import snapshot_download
             import os
-            #国外用户可以如下取消：export HF_ENDPOINT=
-            endpoint = os.environ.get('HF_ENDPOINT','https://hf-mirror.com')
+
+            # 国外用户export HF_ENDPOINT=https://huggingface.co
+            endpoint = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
             if not endpoint:
-                endpoint=None
-            snapshot_download(
-                cfg.get('huggingface'),
-                local_dir=path,
-                endpoint=endpoint
-            )
-            path.joinpath('_done.txt').write_text('ok')
-            cfg['verified']=True
+                endpoint = None
+            snapshot_download(cfg.get("huggingface"), local_dir=path, endpoint=endpoint)
+            path.joinpath("_done.txt").write_text("ok")
+            cfg["verified"] = True
+        elif cfg.get("archive") == "tar":
+            download_and_extract_tar(cfg["url"], path, cfg.get("required_files", []))
+            path.joinpath("_done.txt").write_text("ok")
+            cfg["verified"] = True
         else:
             download(cfg["url"], path)
             hash = hashlib.sha256(path.read_bytes()).digest().hex()
@@ -123,8 +148,45 @@ def get_model_path(name: str):
         return path
 
 
+def download_and_extract_tar(url: str, path: Path, required_files: list[str]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=path.parent) as temp_dir:
+        temp_path = Path(temp_dir)
+        archive_path = temp_path / "model.tar"
+        extract_path = temp_path / "extract"
+        extract_path.mkdir()
+        download(url, archive_path)
+        with tarfile.open(archive_path) as tar:
+            for member in tar.getmembers():
+                target = extract_path / member.name
+                if not target.resolve().is_relative_to(extract_path.resolve()):
+                    raise RuntimeError(f"tar contains unsafe path: {member.name}")
+            tar.extractall(extract_path)
+
+        source = _find_model_dir(extract_path, required_files)
+        if source is None:
+            raise RuntimeError("下载的模型包不包含所需文件")
+        path.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, path, dirs_exist_ok=True)
+
+
+def _find_model_dir(root: Path, required_files: list[str]) -> Path | None:
+    if not required_files:
+        return root
+    for candidate in [root, *root.rglob("*")]:
+        if candidate.is_dir() and all(
+            candidate.joinpath(file).is_file() for file in required_files
+        ):
+            return candidate
+    return None
+
+
+def get_ocr_path(model: str, size: str):
+    return get_model_path(f"PP-OCRv6_{size}_{model}_onnx") / "inference.onnx"
+
+
 def download(url: str, file: Path):
-    file.parent.mkdir(parents=True,exist_ok=True)
+    file.parent.mkdir(parents=True, exist_ok=True)
     with httpx.stream("GET", url, follow_redirects=True) as r:
         total = int(r.headers.get("content-length", 0))
         from rich.progress import Progress
@@ -137,85 +199,42 @@ def download(url: str, file: Path):
                     progress.advance(task, len(chunk))
 
 
-def download_all():
-    #因为第三方库需要的下载模型，但是下载并不支持多进程也不执行多线程，也就是如果同时启动多个进程或者多个线程
-    #执行就会冲突，所以先下载好
-    #rapid_ocr
-    download_ocr()
-    #rapid_layout
-    download_layout()
-    #table_det
-    #download_table_cls()
-    #download_formula()
-    get_model_path('PP-FormulaNet_plus-M_infer')
-    #get_model_path('PP-FormulaNet_plus-S_infer')
-    get_model_path('mfr')
-    get_model_path('table_det.onnx')
-
-
-
-
-
-def download_formula():
-    get_model_path('formula/encoder.onnx')
-    get_model_path('formula/decoder.onnx')
-    get_model_path('formula/image_resizer.onnx')
-    get_model_path('formula/tokenizer.json')
-
 def download_mfr():
-    get_model_path('mfr')
+    get_model_path("mfr")
 
 
 def download_ocr():
-    from rapidocr import ModelType, OCRVersion, RapidOCR
-    for version in [OCRVersion.PPOCRV5, OCRVersion.PPOCRV4]:
-        for model_type in [ModelType.MOBILE, ModelType.SERVER]:
-            params = {
-                'Det.ocr_version': version,
-                'Rec.ocr_version': version,
-                # 目前没有配置v5的，必须使用v4的
-                'Cls.ocr_version': version,#OCRVersion.PPOCRV4,
-                # server or mobile
-                'Det.model_type': model_type,
-                'Rec.model_type': model_type,
-                #v4仅仅有mobile
-                'Cls.model_type': ModelType.MOBILE if version==OCRVersion.PPOCRV4 else model_type,
-            }
-            RapidOCR(params=params)
+    get_model_path("PP-OCRv6_tiny_rec_onnx")
+    get_model_path("PP-OCRv6_tiny_det_onnx")
+
+    get_model_path("PP-OCRv6_small_rec_onnx")
+    get_model_path("PP-OCRv6_small_det_onnx")
+
+    get_model_path("PP-OCRv6_medium_rec_onnx")
+    get_model_path("PP-OCRv6_medium_det_onnx")
+
 
 def download_layout():
-    from rapid_layout import ModelType
-    from rapid_layout.model_handler import ModelProcessor
-    ModelProcessor.get_model_path(ModelType.PP_DOC_LAYOUTV2)
-    ModelProcessor.get_model_path(ModelType.PP_DOC_LAYOUTV3)
+    get_model_path("PP-DocLayout-V2")
+    get_model_path("PP-DocLayout-V3")
+    get_model_path("PP-DocLayout-L")
+    get_model_path("PP-DocLayout_plus-L")
 
 
-#===抛弃===
-def download_table_cls():
-    try:
-        from table_cls import TableCls
-        from table_cls.main import ModelType
-        TableCls.get_model_path(ModelType.YOLO_CLS_X.value,None)
-        TableCls.get_model_path(ModelType.YOLO_CLS.value,None)
-        TableCls.get_model_path(ModelType.PADDLE_CLS.value,None)
-        TableCls.get_model_path(ModelType.Q_CLS.value,None)
-    except ImportError:
-        pass
+def download_table():
+    get_model_path("table_det.onnx")
 
-def download_latex():
-    from pathlib import Path
 
-    from rapid_latex_ocr import LatexOCR, utils
-    from rapid_latex_ocr.utils import DownloadModel
-    def patch_url():
-        #old_init=DownloadModel.__init__
-        def new_init(self) -> None:
-            #这个太慢
-            #self.url = "https://github.com/RapidAI/RapidLaTeXOCR/releases/download/v0.0.0"
-            self.url = "https://modelscope.cn/models/Memect/rapid_latex_ocr/resolve/v1.0.0"
-            self.cur_dir = Path(utils.__file__).resolve().parent
-        DownloadModel.__init__=new_init
+def download_formula():
+    get_model_path("PP-FormulaNet_plus-M_infer")
+    # get_model_path('PP-FormulaNet_plus-S_infer')
+    get_model_path("mfr")
 
-    patch_url()
 
-    LatexOCR()
+def download_all():
+    # 因为第三方库需要的下载模型，但是下载并不支持多进程也不执行多线程，也就是如果同时启动多个进程或者多个线程
+    # 执行就会冲突，所以先下载好
+    download_ocr()
+    download_layout()
+    download_table()
+    download_formula()

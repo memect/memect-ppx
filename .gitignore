@@ -14,6 +14,8 @@
 !/.gitignore
 !/.dockerignore
 !/install
+!/scripts/
+!/scripts/build-gpu-image.sh
 !/.gitattributes
 !/skills/
 !/skills/ppx-parse/

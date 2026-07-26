@@ -956,7 +956,7 @@ class WingdingsRecognizer:
         s_result = self._match_square_shape(patch)
         p_result = self._match_phash(patch)
 
-        verbose=False
+        verbose=0
 
         if verbose:
             print('=============>>>')
@@ -965,7 +965,22 @@ class WingdingsRecognizer:
             print(f"phash:    {hex(p_result) if p_result else None}")
 
         # 策略：template 优先；如果几何特征明确是方框而 template 命中非方框，使用方框结果。
-        if t_result is not None and (
+
+
+        from collections import Counter
+        results:list[int]=[]
+        if t_result is not None:
+            results.append(t_result)
+        if s_result is not None:
+            results.append(s_result)
+        if p_result is not None:
+            results.append(p_result)
+
+        if len(results)>0 and (item:=Counter(results).most_common()[0]) and item[1]>1:
+            result=item[0]
+            if verbose:
+                print(f"选择 次数最多的: {hex(result)} {chr(result)} {wingdings2standard('wingdings',chr(result))}")
+        elif t_result is not None and (
             s_result is None or t_result in self._SQUARE_CODES
         ):
             result = t_result

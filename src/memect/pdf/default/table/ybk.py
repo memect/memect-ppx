@@ -101,7 +101,7 @@ class Parser:
         table.subtype='ybk'
         table.vobject = vobj
         filler = TableFiller()
-        result = filler.get_objects(vobj)
+        result = filler.get_objects([vobj])
         if fill:
             filler.fill(table, result)
         else:

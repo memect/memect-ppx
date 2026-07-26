@@ -423,7 +423,7 @@ class HtmlRenderer:
         tag = _Tag("div")
         tag.classes.append("page")
         tag.set_size(page.bbox.transform(m), scale=scale)
-        tag.set_data({'number':page.number})
+        tag.set_data({'number':page.number,'type':str(page.type)})
 
         render_header(tag)
         render_body(tag)
@@ -509,7 +509,18 @@ class HtmlRenderer:
 
             if cell.merged is True:
                 td.set_data({'cell-merged':'true'})
-
+            
+            show_bg_color=True
+            if show_bg_color and not table.is_layout():
+                #显示了背景颜色，字体的颜色也需要更新，因为默认使用白底黑字
+                #如果背景是黑色的
+                if cell.color and not cell.color.is_white():
+                    #显示了背景颜色，需要同时使用对应的字体颜色
+                    #td.style['background-color']=f'#{cell.color.rgba[0]:02x}{cell.color.rgba[1]:02x}{cell.color.rgba[2]:02x}'
+                    #td.style['color']=f'#{cell.font_color.rgba[0]:02x}{cell.font_color.rgba[1]:02x}{cell.font_color.rgba[2]:02x}'
+                    td.set_data({
+                        'color':f'#{cell.color.rgba[0]:02x}{cell.color.rgba[1]:02x}{cell.color.rgba[2]:02x}'
+                    })
 
             return [td]
 

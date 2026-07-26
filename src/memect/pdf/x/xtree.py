@@ -1,5 +1,5 @@
 import logging
-import threading
+
 from typing import Any, Final, Mapping
 
 
@@ -61,23 +61,8 @@ class XTreeParser:
         self._text_parser = XTextParser()
         self._table_parser = XTableParser()
         self._group_parser = XGroupParser()
-        self._parsers: Final[dict[TreeBackend, XParser]] = {}
-        self._lock: Final = threading.RLock()
-
-    def _get_parser(self, backend: TreeBackend) -> XParser:
-        with self._lock:
-            parser = self._parsers.get(backend)
-            if parser is None:
-                if backend == TreeBackend.DEFAULT:
-                    from .xtree_default import Parser
-                    parser = Parser(self._args.default)
-                elif backend == TreeBackend.LLM:
-                    from .xtree_llm import Parser
-                    parser = Parser(self._args.llm)
-                else:
-                    raise ValueError(f"不支持的backend={backend}")
-                self._parsers[backend] = parser
-            return parser
+        #self._parsers: Final[dict[TreeBackend, XParser]] = {}
+        #self._lock: Final = threading.RLock()
 
     def parse(self, doc: KDocument):
         debugger: Final = self._debugger.bind()

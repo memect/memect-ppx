@@ -174,57 +174,6 @@ def get_model_path(file: str | Path) -> str | None:
         return None
 
 
-_paddle_layout_v2 = {
-    # 粗体或者有背景颜色的文本
-    "paragraph_title": "title",
-    # 会把有一个大边框包围的文本也识别为图
-    "image": "figure",
-    "text": "text",
-    # 页码
-    "number": "footer",
-    # 通常表示一个整页的，里面包含了title或者text?
-    "abstract": "text",
-    # 目录内容
-    "content": "toc",
-    "figure_title": "title",
-    # 'formula': 'formula',
-    # v2版本分成2个类型
-    "display_formula": "formula",
-    "inline_formula": "inline_formula",
-    "table": "table",
-    "table_title": "title",
-    # 通常表示一个整页的，里面包含了小的text，所以可以使用reference类型
-    "reference": "text",
-    # v2特有的
-    "reference_content": "text",
-    "doc_title": "title",
-    # 这个也是文本，只是多数情况下还是比较准确的，因为有一条水平分割线来标识位置
-    # 当然为text
-    "footnote": "footnote",
-    "header": "header",
-    # 算法，论文中出现，有文本，通常可以作为图片处理？
-    # 映射为figure，表示作为图片处理，映射为text，表示作为文本处理
-    "algorithm": "code",
-    "footer": "footer",
-    # 圆形的，正方形的多数识别为image
-    "seal": "seal",
-    "chart_title": "title",
-    "chart": "chart",
-    # 公式的编号，如：(12.11)
-    "formula_number": "text",
-    "header_image": "figure",
-    # 标记为图片还是footer？因为其他的可能没有这种类型
-    "footer_image": "figure",
-    # 还是先使用这个名字
-    "aside_text": "other_text",
-    # v2特有的，获得垂直书写的，如果是英文，通常还顺时针旋转90度
-    "vertical_text": "text",
-    # 如：来源：xxxxx
-    "vision_footnote": "text",
-}
-
-_paddle_layout_v3 = _paddle_layout_v2
-
 # 4090显卡比cpu快，2080/3090等不一定，windows下可以安装onnxruntime-directml
 # 4090显卡0.5秒/张
 # 2080/3090显卡1.5-2秒/张
@@ -324,7 +273,7 @@ settings: dict[str, Any] = {
                     "max_task_size": 10,
                 },
                 # or layout_v3
-                "model": "layout_v3",
+                "model": "layout",
             },
             "formula": {
                 "name": "formula",
@@ -353,108 +302,39 @@ settings: dict[str, Any] = {
             },
         },
         "models": {
-            # 这里的设置对应RapidOCR，然后必须使用具体的枚举类型，但是使用了这些，每次就必须载入RapidOCR这个库
-            # 这个又直接载入cv2/numpy，导致在多进程下，有些不需要的，载入就变慢，所以这里还是使用字符串
-            # 在这个模型中做转换处理
             "ocr": {
-                "name": "RapidOCRModel",
+                "name": "OCRModel",
                 "kwargs": {
-                    "Global.model_root_dir": get_model_path("./models/ocr"),
-                    "Global.text_score": 0.5,
-                    # -1表示无论如何都det，否则w/h>width_height_ratio，就不det了，而是直接rec
-                    "Global.width_height_ratio": -1,
-                    # 容易把正常的文本识别为旋转了180度
-                    "Global.use_cls": False,
-                    # 需要的内存和显存也更大
-                    "Global.max_side_len": 7000,
-                    "Det.engine_type": _ocr_device["engine"],
-                    "Cls.engine_type": _ocr_device["engine"],
-                    "Rec.engine_type": _ocr_device["engine"],
-                    "Det.model_type": get_value("ppx_ocr_model", "mobile"),
-                    "Rec.model_type": get_value("ppx_ocr_model", "mobile"),
-                    # 如果是v5，可以为server,mobile，如果为v4，只能够mobile
-                    "Cls.model_type": get_value("ppx_ocr_model", "mobile")
-                    if get_value("ppx_ocr_version", "v5") == "v5"
-                    else "mobile",
-                    # 默认为6
-                    # 如果使用openvino，使用1更快
-                    # 如果使用cuda+onnxruntime，在4090，使用默认即可，2080/3090，需要使用100
-                    # "Rec.rec_batch_num":6,
-                    # 表示下载目录
-                    #'Det.model_dir':'./models/ocr',
-                    # 表示模型文件
-                    #'Det.model_path':'',
-                    #'Cls.model_path':'',
-                    #'Rec.model_path':'',
-                    "Det.ocr_version": f"PP-OCR{get_value('ppx_ocr_version', 'v5')}",
-                    "Rec.ocr_version": f"PP-OCR{get_value('ppx_ocr_version', 'v5')}",
-                    "Cls.ocr_version": f"PP-OCR{get_value('ppx_ocr_version', 'v5')}",
-                    # linux/windows
-                    "EngineConfig.onnxruntime.use_cuda": _ocr_device.get(
-                        "use_cuda", False
-                    ),
-                    # 在mac m系列下，用这个更快？
-                    "EngineConfig.onnxruntime.use_coreml": _ocr_device.get(
-                        "use_coreml", False
-                    ),
-                    # 在华为gpu下，用这个
-                    "EngineConfig.onnxruntime.use_cann": _ocr_device.get(
-                        "use_cann", False
-                    ),
-                    # 在windows下，用这个更快？
-                    "EngineConfig.onnxruntime.use_dml": _ocr_device.get(
-                        "use_dml", False
-                    ),
-                    # 默认为1.6,[1.6,2]之间.，对于密集的小文本更准确
-                    "Det.unclip_ratio": 1.5,
-                    "Det.box_thresh": 0.5,
-                    #
-                    # 默认为fast，slow，速度上差别不大
-                    "Det.score_mode": "fast",
-                    "Det.limit_side_len": 736,
-                    "Det.limit_type": "min",
+                    # tiny,small,medium
+                    "model": "tiny",
+                    "det_score_threshold": 0.4,
+                    "rec_batch_size": 100,
+                    # "det_model_path":None,
+                    # "rec_model_path":None,
+                    "engine": _ocr_device.get("engine", "openvino"),
+                    "use_cuda": _ocr_device.get("use_cuda", False),
+                    "use_cann": _ocr_device.get("use_cann", False),
+                    "use_dml": _ocr_device.get("use_dml", False),
                 },
             },
-            "layout_v2": {
-                "name": "RapidLayoutModel",
+            "layout": {
+                "name": "LayoutModel",
                 "kwargs": {
-                    "mapping": dict(_paddle_layout_v2),
-                    "model_type": "pp_doc_layoutv2",
-                    "model_dir_or_path": get_model_path(
-                        "./models/layout/pp_doc_layoutv2.onnx"
-                    ),
-                    "engine_type": _layout_device["engine"],
-                    "engine_cfg": {
-                        "use_cuda": _layout_device.get("use_cuda", False),
-                        "use_cann": _layout_device.get("use_cann", False),
-                        "use_dml": _layout_device.get("use_dml", False),
-                    },
-                    "conf_thresh": 0.3,
-                    "iou_thresh": 0.5,
-                },
-            },
-            "layout_v3": {
-                "name": "RapidLayoutModel",
-                "kwargs": {
-                    "mapping": dict(_paddle_layout_v3),
-                    "model_type": "pp_doc_layoutv3",
-                    "model_dir_or_path": get_model_path(
-                        "./models/layout/pp_doc_layoutv3.onnx"
-                    ),
-                    "engine_type": _layout_device["engine"],
-                    "engine_cfg": {
-                        "use_cuda": _layout_device.get("use_cuda", False),
-                        "use_cann": _layout_device.get("use_cann", False),
-                        "use_dml": _layout_device.get("use_dml", False),
-                    },
-                    "conf_thresh": 0.3,
-                    "iou_thresh": 0.5,
+                    # "model_path":get_model_path('./models/pp_layoutv2.onnx'),
+                    #"model_path":get_model_path('./models/pp_layoutv3.onnx'),
+                    #v2,v3,l,plus_l
+                    "version":"v2",
+                    "score_threshold":0.5,
+                    "engine": _layout_device["engine"],
+                    "use_cuda": _layout_device.get("use_cuda", False),
+                    "use_cann": _layout_device.get("use_cann", False),
+                    "use_dml": _layout_device.get("use_dml", False),
                 },
             },
             "table": {
                 "name": "TableModel",
                 "kwargs": {
-                    "model_path": get_model_path("./models/memect/table_det.onnx"),
+                    #"model_path": get_model_path("./models/memect/table_det.onnx"),
                     "score_threshold": 0.5,
                     "engine": _table_device["engine"],
                     "use_cuda": _table_device.get("use_cuda", False),
@@ -485,8 +365,7 @@ settings: dict[str, Any] = {
                     "use_dml": _formula_device.get("use_dml", False),
                 },
             },
-
-            #下面这2个模型，支持formula，table，ocr
+            # 下面这2个模型，支持formula，table，ocr
             # 目前主要用来识别公式
             "paddle": {
                 "name": "LLMModel",
@@ -581,6 +460,11 @@ settings: dict[str, Any] = {
                 },
             },
         },
+        "baidu": {
+            "model": {
+                "base_url": get_value("ppx_baidu_url", "http://127.0.0.1:4003/v1"),
+            }
+        },
         "default": {
             # pdf解析的配置
             "pdf": {
@@ -590,6 +474,15 @@ settings: dict[str, Any] = {
             # 图片解析的配置
             "image": {},
             "table": {"ybk": {}, "wbk": {}, "llm": {}},
+            "features": {
+                # 这个名字空间为默认，也就是不添加到全名中，否则，feature的全名为：{ns}.{filename}
+                "default": {
+                    # 查找该包下的所有py文件
+                    "package": "memect.features",
+                    #
+                    # "class":"memect.features.feature1.Feature"
+                }
+            },
         },
         "tree": {
             # 跨页/跨栏文本合并

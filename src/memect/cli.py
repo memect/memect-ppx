@@ -1,4 +1,5 @@
 # coding=utf-8
+from enum import StrEnum, auto
 import json
 import os
 import re
@@ -10,8 +11,15 @@ import httpx
 import typer
 
 from .pdf.base import Backend, OCRMode, ParseMode, TableMode, TreeBackend
+from .train.layout import layout as layout_train_command
 
 app:Final= typer.Typer()
+train_app: Final = typer.Typer(help="训练")
+
+train_app.command("layout", help="基于PP-DocLayout预标注并训练版面检测模型")(
+    layout_train_command
+)
+app.add_typer(train_app, name="train")
 _DOCTOR_DEFAULT = "__ppx_default_doctor__"
 _AGENT_DEFAULT = "./agent.json"
 
@@ -161,6 +169,8 @@ def _parse_llm(s: str) -> dict[str, Any]:
             name = "deepseek"
         elif "glm" in id_:
             name = "glm"
+        elif "Unlimited-OCR" in id_:
+            name='baidu'
         else:
             raise ValueError(f"不支持的模型:{id_}，id需要包含:deepseek,paddle,glm")
         return {
@@ -243,11 +253,20 @@ def _detect_gpu() -> dict[str, bool]:
 
     return result
 
+
+class OCRModel(StrEnum):
+    TINY=auto()
+    SMALL=auto()
+    MEDIUM=auto()
+
 @app.command()
 def start(
     host: Annotated[str | None, typer.Option(help="监听地址")] = None,
     port: Annotated[int | None, typer.Option(help="监听端口")] = None,
-    cpu: Annotated[bool, typer.Option(help="强制使用cpu，即使当前有gpu")] = False,
+    cpu: Annotated[
+        Literal["all", "ocr", "layout","table","formula"] | None,
+        typer.Option(help="强制使用cpu，即使当前有gpu"),
+    ] = None,
     cuda: Annotated[
         str | None,
         typer.Option(help="指定使用哪些gpu，等同于CUDA_VISIBLE_DEVICES的设置"),
@@ -313,10 +332,14 @@ def parse(
     ] = None,
     mode: Annotated[ParseMode | None, typer.Option(help="仅仅解析页，或者解析章节树")] = None,
     ocr: Annotated[OCRMode | None, typer.Option(help="如何使用ocr")] = None,
+    ocr_model:Annotated[OCRModel|None,typer.Option(help='tiny,small,medium')]=None,
     table: Annotated[TableMode | None, typer.Option(help="如何解析表格")] = None,
     formula:Annotated[str|None,typer.Option(help='可以指定解析公式的paddle/glm的url，或者no|pp|mfr|paddle|glm，指定paddle/glm，需要先配置url，no表示不解析公式，仅仅保存为图片')]=None,
     # remove_watermark:Annotated[bool|None,typer.Option(help='设置是否需要清除水印')]=None,
     tree:Annotated[TreeBackend|None,typer.Option(help='如何解析章节树')]=None,
+    feature:Annotated[str|None,typer.Option(help='可以输入多个，使用逗号分隔')]=None,
+    layout_model:Annotated[str|None,typer.Option(help='v2/v3/l/plus_l')]=None,
+    layout_model_path:Annotated[str|None,typer.Option(help='自训练的模型目录，必须包含inference.onnx')]|None=None,
     # all:Annotated[bool,typer.Option()]=None,
     md: Annotated[bool | None, typer.Option(help="生成markdown，默认为true")] = None,
     doc_json: Annotated[bool | None, typer.Option("--json", help="输出json，默认为true")] = None,
@@ -397,10 +420,18 @@ def parse(
         pass
     _apply_formula_settings(formula, custom_settings, params)
 
+    if ocr_model:
+        custom_settings['model_manager.models.ocr.kwargs.model']=str(ocr_model)
+
     if parallel is not None:
         # 如果使用gpu，将需要更大的内存
         for n in ["ocr", "layout", "formula", "table"]:
             custom_settings[f"model_manager.executors.{n}.max_workers"] = parallel
+    
+    if layout_model is not None:
+        custom_settings['model_manager.models.layout.kwargs.version']=layout_model
+    if layout_model_path is not None:
+        custom_settings['model_manager.models.layout.kwargs.model_path']=layout_model_path
 
     _set_device(cpu, cuda=cuda)
 
@@ -415,6 +446,9 @@ def parse(
     if pages:
         params.pagenos = _parse_pages(pages)
     
+
+    if feature:
+        params.features=[f.strip() for f in feature.split(',')]
 
     # if remove_watermark is not None:
     # params.remove_watermark=remove_watermark

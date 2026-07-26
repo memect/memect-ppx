@@ -51,18 +51,18 @@ def _load_settings(default_file:str|Path,custom_settings:Mapping[str,Any]|None=N
     for custom_file in [custom_dir.joinpath(f'{name}.py'),custom_dir.joinpath(f'{name}.json')]:
         if custom_file.is_file():
             console.log(f'load custom config:{custom_file}')
-            _set_values(data,load_data(custom_file,py_name='settings'))
+            set_values(data,load_data(custom_file,py_name='settings'))
             break
 
     #环境变量的设置，目前不支持，因为太多容易混乱，通过上面的自定义文件，或者命令行传递就可以解决
 
     #命令行的设置
     if custom_settings:
-        _set_values(data,custom_settings)
+        set_values(data,custom_settings)
     return data
 
 
-def _set_values(
+def set_values(
     data: MutableMapping[str, Any],
     values: Mapping[str, Any] | Sequence[tuple[str, Any]] | None,
     *,
