@@ -26,6 +26,7 @@ from memect.base.matrix import Matrix
 from memect.base.utils import MyBaseModel
 from memect.pdf.base import (
     CharSource,
+    KBlock,
     KChar,
     KColor,
     KDocument,
@@ -36,6 +37,7 @@ from memect.pdf.base import (
     KPDFFigure,
     KPage,
     KSpan,
+    KTable,
     KText,
     OCRMode,
     PageType,
@@ -44,6 +46,7 @@ from memect.pdf.base import (
 )
 from memect.pdf.commons import FileInfo
 from memect.pdf.default.block import BlockParser
+from memect.pdf.default.feature import FeatureParser
 from memect.pdf.default.other import OtherParser
 from memect.pdf.model import ModelManager
 from memect.pdf.sort import Sorter
@@ -53,7 +56,6 @@ from .footnote import PageFootnoteParser
 from .header import PageHeaderParser
 from .pdf import PdfParser, PdfParserArgs
 from .table.parser import TableParser
-
 
 
 class _OCRSpan(TypedDict):
@@ -78,26 +80,32 @@ class DefaultParserArgs(MyBaseModel):
     # image: ImageParserArgs = Field(default_factory=ImageParserArgs)
     pdf: PdfParserArgs = Field(default_factory=PdfParserArgs)
 
+    features: dict[str, Any] = Field(default_factory=dict)
+
+
 class _A(Protocol):
-    _logger:logging.Logger
+    _logger: logging.Logger
 
 
-def log[S:_A,**P,T](fn:Callable[Concatenate[S,KDocument,P],T])->Callable[Concatenate[S, KDocument, P], T]:
+def log[S: _A, **P, T](
+    fn: Callable[Concatenate[S, KDocument, P], T],
+) -> Callable[Concatenate[S, KDocument, P], T]:
 
     @functools.wraps(fn)
-    def wrapper(self:S,doc:KDocument,*args:P.args,**kwargs:P.kwargs)->T:
+    def wrapper(self: S, doc: KDocument, *args: P.args, **kwargs: P.kwargs) -> T:
         name = fn.__name__
         timer = utils.Timer.start()
         try:
-            self._logger.info('start %s',name,stacklevel=2)
-            return fn(self,doc,*args,**kwargs)
+            self._logger.info("start %s", name, stacklevel=2)
+            return fn(self, doc, *args, **kwargs)
         finally:
-            self._logger.info('end %s,elapsed=%.3f',name,timer.elapsed(),stacklevel=2)
-            doc.state[name]={
-                'elapsed':timer.elapsed()
-            }
-            
+            self._logger.info(
+                "end %s,elapsed=%.3f", name, timer.elapsed(), stacklevel=2
+            )
+            doc.state[name] = {"elapsed": timer.elapsed()}
+
     return wrapper
+
 
 class DefaultParser:
     """使用layout+pdf+ocr+llm的方式解析文档"""
@@ -105,7 +113,11 @@ class DefaultParser:
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
     _debugger = XDebugger(f"{__module__}.{__qualname__}")
 
-    def __init__(self,manager:ModelManager, args: DefaultParserArgs | Mapping[str, Any] | None = None):
+    def __init__(
+        self,
+        manager: ModelManager,
+        args: DefaultParserArgs | Mapping[str, Any] | None = None,
+    ):
         super().__init__()
         self._args: Final = DefaultParserArgs.create(args)
         self._layout_model: Final = manager.get(self._args.layout)
@@ -118,11 +130,14 @@ class DefaultParser:
         self._pdf_parser: Final = PdfParser(self._args.pdf)
         self._table_parser: Final = TableParser(manager)
 
-        self._other_parser:Final = OtherParser()
+        self._other_parser: Final = OtherParser()
         self._header_parser: Final = PageHeaderParser()
         self._footer_parser: Final = PageFooterParser()
         self._footnote_parser: Final = PageFootnoteParser()
-        self._block_parser:Final = BlockParser()
+        self._block_parser: Final = BlockParser()
+
+        self._feature_parser: Final = FeatureParser(self._args.features)
+        #self._xprepare: Final = XPreparer(manager)
 
     def parse(self, doc: KDocument):
         timer = utils.Timer.start()
@@ -136,31 +151,34 @@ class DefaultParser:
         self._parse_texts(doc)
         self._parse_figures(doc)
         self._parse_formulas(doc)
-        #加入特别功能处理，如：释义表格
-        #处理表格
         self._parse_tables(doc)
         if doc.params.mode == ParseMode.PPT:
             # 如果是按ppt，就不需要解析页面页脚等了
+            self._feature_parser.parse(doc)
             self._sort_ppt(doc)
+            #如果是ppt，不需要处理跨页/跨栏的
         else:
             # 按页解析即可
             self._other_parser.parse(doc)
             self._header_parser.parse(doc)
             self._footer_parser.parse(doc)
             self._footnote_parser.parse(doc)
+            # 处理features
+            self._feature_parser.parse(doc)
+            # 把某些对象看成一个block
             self._block_parser.parse(doc)
             self._sort(doc)
-            #TODO 再考虑跨栏/跨页的情况，对齐表格，或者把某些文本转换为表格
-            #因为后续章节树分析，合并跨页表格需要
-            #TODO 不管后续是否需要解析章节树，都需要做处理的
-            if doc.params.mode==ParseMode.TREE:
-                pass
-    
+            #如果是跨页/跨栏无边框表格，尝试对齐，之所以放在这里，是需要先分栏
+            #TODO 后续可以先分栏（sort），然后再解析表格（前面可以先使用KBlock表示表格）
+            #这样就可以self._parse_tables(doc)即可，不需要分成2个步骤
+            self._table_parser.xparse(doc)
+            
+
     @log
     def _parse_layout(self, doc: KDocument):
         """版面分析"""
         debugger = self._debugger.bind()
-        self._layout_model.parse(doc, self._layout_key,batch_size=10)
+        self._layout_model.parse(doc, self._layout_key, batch_size=10)
         for page in doc.working_pages:
             page.load_layout(page.cache.pop(self._layout_key))
             if debugger.allow("draw", page=page.number):
@@ -170,7 +188,7 @@ class DefaultParser:
                     ("vobjects", page.vobjects),
                     dir="debug/default/layout",
                 )
-    
+
     @log
     def _parse_pdf(self, doc: KDocument):
         # 如果是pdf文件，先使用pdf获得
@@ -191,8 +209,8 @@ class DefaultParser:
                 page.draw(
                     ("vobjects", page.vobjects),
                     ("chars", page.pdf_chars),
-                    (f"lines={len(page.pdf_lines)}",page.pdf_lines),
-                    (f"rects={len(page.pdf_rects)}",page.pdf_rects),
+                    (f"lines={len(page.pdf_lines)}", page.pdf_lines),
+                    (f"rects={len(page.pdf_rects)}", page.pdf_rects),
                     dir="debug/default/pdf",
                     show_type=False,
                 )
@@ -233,8 +251,11 @@ class DefaultParser:
                         figures = [
                             figure for figure in figures if figure.bbox.height <= 20
                         ]
-                    
-                    if is_logo(vobj,figures,chars):
+
+                    if is_logo(vobj, figures, chars):
+                        pass
+                    elif len(figures)==1 and len(invalid_chars)==0 and (figures[0].bbox.width<20 and figures[0].bbox.height<20):
+                        #可能为小logo？[logo]xxxxxx
                         pass
                     elif len(chars) == 0:
                         # 如果没有字符，就使用ocr（也有可能原文是一个logo或者其他，不管了）
@@ -245,7 +266,6 @@ class DefaultParser:
                         # 如果在表格中，可能为普通的图片，也可能为特殊效果的文字
                         # 有些图片为单个字符，为了避免截图过小，合并连续的多个图片
                         # groups = merge_figures(figures+invalid_chars)
-
                         groups = merge_bboxes(figures + invalid_chars)
                         objs.append((vobj, [get_bbox(group) for group in groups]))
                         # TODO 可以把无效的pdf字符也删除了？或者后续直接1对1匹配即可？
@@ -262,26 +282,30 @@ class DefaultParser:
                         pass
 
             return objs
-        
-        def is_logo(vobj:VObject,figures:Sequence[KPDFFigure],chars:Sequence[KChar])->bool:
-            #TODO 如果有图片且在页眉页脚，然后为[图片+pdf文字的]，多数情况都是logo，跳过识别文字？
-            #从概率上99.99%为logo，0.01%为文字
-            #如果是ppt，就没有页眉页脚
-            if len(figures)!=1:
-                return False
-            
-            if len(chars)==0:
-                return False
-            
-            page=vobj.page
-            if page.bbox.height<500:
-                return False
-            if not (page.bbox.y1-vobj.bbox.y0<=70 or vobj.bbox.y1-page.bbox.y0<=70):
-                #页眉页脚
+
+        def is_logo(
+            vobj: VObject, figures: Sequence[KPDFFigure], chars: Sequence[KChar]
+        ) -> bool:
+            # TODO 如果有图片且在页眉页脚，然后为[图片+pdf文字的]，多数情况都是logo，跳过识别文字？
+            # 从概率上99.99%为logo，0.01%为文字
+            # 如果是ppt，就没有页眉页脚
+            if len(figures) != 1:
                 return False
 
-            #第一种：文字logo+文字
-            #第二种：文字logo，大一些或者小一些，没有跟着文字
+            if len(chars) == 0:
+                return False
+
+            page = vobj.page
+            if page.bbox.height < 500:
+                return False
+            if not (
+                page.bbox.y1 - vobj.bbox.y0 <= 70 or vobj.bbox.y1 - page.bbox.y0 <= 70
+            ):
+                # 页眉页脚
+                return False
+
+            # 第一种：文字logo+文字
+            # 第二种：文字logo，大一些或者小一些，没有跟着文字
             return True
 
         def merge_bboxes(objs: Sequence[KObject]):
@@ -325,7 +349,8 @@ class DefaultParser:
                 objs = get_pdf_objects(page)
                 if len(objs) > 0:
                     # 至少部分文字来自ocr
-                    page.type = PageType.IMAGE
+                    # page.type = PageType.IMAGE
+                    page.type = PageType.HYBRID
                 else:
                     # 纯pdf
                     page.type = PageType.PDF
@@ -349,7 +374,7 @@ class DefaultParser:
                             quads.append(area.transform(m))
                         else:
                             bboxes.append(area.transform(m))
-                #TODO 对于很大的图片，需要分成多个区域识别
+                # TODO 对于很大的图片，需要分成多个区域识别
                 img = images.make_image(page.image, quads=quads, bboxes=bboxes)
                 # 这种做法结果设置到page.cache
                 items.append((img, page.cache))
@@ -400,9 +425,14 @@ class DefaultParser:
                     weights.append(1)
                 else:
                     weights.append(2)
+            
+
+            quads = quad.split("y" if is_vertical else "x", weights=list(reversed(weights)) if is_vertical else weights)
+            if is_vertical:
+                quads.reverse()
 
             for c, q in zip(
-                text, quad.split("y" if is_vertical else "x", weights=weights)
+                text, quads
             ):
                 char = KChar(
                     page,
@@ -437,7 +467,7 @@ class DefaultParser:
                 page.draw(
                     ("vobjects", page.vobjects),
                     ("ocr_image", ocr_image),
-                    ("ocr_spans",ocr_spans),
+                    ("ocr_spans", ocr_spans),
                     ("ocr_chars", ocr_chars),
                     show_type=False,
                     dir="debug/default/ocr",
@@ -447,16 +477,16 @@ class DefaultParser:
             for vobj in ocr_objects:
                 vobj.ocr_chars.clear()
                 if ocr_chars:
-                    chars = vobj.bbox.get(ocr_chars, ratio=0.7,remove=True)
+                    chars = vobj.bbox.get(ocr_chars, ratio=0.7, remove=True)
                     vobj.ocr_chars.extend(chars)
 
             # 对于少部分在区域内的
             for vobj in ocr_objects:
                 if not ocr_chars:
                     break
-                chars = vobj.bbox.get(ocr_chars, ratio=0.4,remove=True)
+                chars = vobj.bbox.get(ocr_chars, ratio=0.4, remove=True)
                 vobj.ocr_chars.extend(chars)
-            
+
             for vobj in ocr_objects:
                 pass
 
@@ -495,7 +525,7 @@ class DefaultParser:
                 if debugger.allow("draw", page=page.number):
                     page.draw(
                         ("ocr_image", ocr_image),
-                        ("ocr_spans",ocr_spans),
+                        ("ocr_spans", ocr_spans),
                         ("ocr_chars", ocr_chars),
                         show_type=False,
                         file=f"debug/default/ocr/{page.number}-{i + 1}.png",
@@ -530,7 +560,7 @@ class DefaultParser:
             self._ocr_key,
             multi=method == 2,
             handler=lambda page: handler(page, method),
-            batch_size=10
+            batch_size=10,
         )
         if method == 1:
             # 解析为对象
@@ -544,45 +574,46 @@ class DefaultParser:
         debugger = self._debugger.bind()
         verbose = True
 
-        def parse_underline(tb:KText):
-            lines = tb.bbox.adjust(y0=tb.bbox.y0-3).get(tb.page.pdf_lines,ratio=0.9)
+        def parse_underline(tb: KText):
+            lines = tb.bbox.adjust(y0=tb.bbox.y0 - 3).get(tb.page.pdf_lines, ratio=0.9)
             tls = tb.lines
-            for i,tl in enumerate(tls):
+            for i, tl in enumerate(tls):
                 y1 = tl.bbox.y0
-                if i+1<len(tls):
-                    y0=tls[i+1].bbox.y1
+                if i + 1 < len(tls):
+                    y0 = tls[i + 1].bbox.y1
                 else:
-                    y0=tl.bbox.y0
-                bbox = tl.bbox.adjust(y0=y0-2,y1=y1+2)
-                underlines = bbox.get(lines,ratio=0.8,remove=True)
+                    y0 = tl.bbox.y0
+                bbox = tl.bbox.adjust(y0=y0 - 2, y1=y1 + 2)
+                underlines = bbox.get(lines, ratio=0.8, remove=True)
                 for line in underlines:
                     tl.set_underline(line.bbox)
-                #在底部的为下划线，在中间的为删除线
+                # 在底部的为下划线，在中间的为删除线
 
-
-        def make_text(page: KPage, vobj: VObject,use_figures:bool=False):
+        def make_text(page: KPage, vobj: VObject, use_figures: bool = False):
             if not vobj.is_any_text():
                 return
             # TODO 补充行内公式/行内图片
-            #TODO 对于一些全角字符，只需要一半空间
-            pdf_chars = vobj.bbox.get(page.pdf_chars, ratio=0.6,get_bbox=lambda char:char.min_bbox)
+            # TODO 对于一些全角字符，只需要一半空间
+            pdf_chars = vobj.bbox.get(
+                page.pdf_chars, ratio=0.6, get_bbox=lambda char: char.min_bbox
+            )
             ocr_chars = vobj.ocr_chars
             objs = pdf_chars + ocr_chars
             if use_figures:
-                #如果有图片且被识别为字，就去掉这个图片
-                #小图片，可能被识别在一个文本框中，而且没有被ocr识别为文字，如：logo
-                pdf_figures = vobj.bbox.get(page.pdf_figures,ratio=0.8)
-                figures:list[KFigure]=[]
+                # 如果有图片且被识别为字，就去掉这个图片
+                # 小图片，可能被识别在一个文本框中，而且没有被ocr识别为文字，如：logo
+                pdf_figures = vobj.bbox.get(page.pdf_figures, ratio=0.8)
+                figures: list[KFigure] = []
                 for f in pdf_figures:
-                    ok=True
+                    ok = True
                     for c in ocr_chars:
                         if c.bbox.intersect(f.bbox):
-                            ok=False
+                            ok = False
                             break
                     if ok:
-                        #这种小图，可能使用原图更好？但是使用原图，又需要pdf解析了
-                        figures.append(f.make_figure())                
-                objs=objs+figures
+                        # 这种小图，可能使用原图更好？但是使用原图，又需要pdf解析了
+                        figures.append(f.make_figure())
+                objs = objs + figures
             if not objs:
                 return
             # TODO 如果包含有ocr chars，全部或者部分，可以调整一下ocr chars的bbox，对齐和美观（因为ocr识别
@@ -600,7 +631,7 @@ class DefaultParser:
 
         def parse_page(page: KPage):
             for vobj in page.vobjects:
-                make_text(page, vobj)
+                make_text(page, vobj,use_figures=True)
 
         self._do(parse_page, doc.working_pages, max_workers=max_workers)
 
@@ -650,15 +681,15 @@ class DefaultParser:
             for page in doc.working_pages:
                 for obj in page.objects:
                     if isinstance(obj, KFormula):
-                        #来自其他模型，返回的是:{"latex":""}
+                        # 来自其他模型，返回的是:{"latex":""}
                         result = obj.cache.pop(self._formula_key)
-                        if 'latex' in result:
-                            text = result['latex']
+                        if "latex" in result:
+                            text = result["latex"]
                         else:
-                            #来自llm的返回的是{"text":""}
-                            text = result['text']
-                            text=KFormula.normalize(text)
-                        obj.latex=text
+                            # 来自llm的返回的是{"text":""}
+                            text = result["text"]
+                            text = KFormula.normalize(text)
+                        obj.latex = text
 
         # 先获得公式对象+截图
         self._do(parse_page, doc.working_pages, max_workers)
@@ -686,7 +717,8 @@ class DefaultParser:
     @log
     def _sort(self, doc: KDocument, max_workers: int = 0):
         from .order import ReadingOrder
-        ReadingOrder().parse(doc,max_workers=max_workers)
+
+        ReadingOrder().parse(doc, max_workers=max_workers)
 
     @log
     def _sort_ppt(self, doc: KDocument, max_workers: int = 0):
@@ -695,5 +727,24 @@ class DefaultParser:
 
         self._do(parse_page, doc.working_pages, max_workers=max_workers)
 
+    @log
+    def _parse_table_styles(self, doc: KDocument, max_workers: int = 0):
 
+        for page in doc.working_pages:
+            for table in page.objects:
+                if isinstance(table, KTable):
+                    # 如果是用来布局的表格，就不需要识别背景颜色了，当然识别也不影响，忽略即可
+                    # 识别表格行列颜色，主要如下
+                    # 表头颜色（1-n行，如果有跨行的单于格）
+                    # 表体颜色，典型的为斑马线格式，按行（多数）或者按列（少数）
+                    # 如果单元格跨行，整个单元格显示的都是相同的颜色
 
+                    # 理论上可以设置每一个单元格的颜色，但是目前仅仅支持如下：
+                    # 表头：前面几行颜色
+                    # 表体：要么按行，要么按列，颜色交替
+
+                    # 在word中，使用table style的时候，只能够设置一个表头，然后交替行/列
+                    # 换句话说，如果有2个不同颜色的表头，可能原文就是使用2个表格设置的，只是粘连在一起
+                    # 结构，内容类似，解析的时候，作为一个表格也是合理的
+                    pass
+        pass

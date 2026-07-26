@@ -1,6 +1,6 @@
-from typing import Final, Mapping, Sequence
+from typing import Any, Final, Mapping, Sequence
 
-from torch import Any
+
 
 from memect.base.bbox import BBox
 

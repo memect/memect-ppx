@@ -164,6 +164,7 @@ class XTableParser:
 
             return self._join1(start, index + 1, objects, test=test)
 
+        #是否宽度对齐，列对齐
         if not self._is_align(start, index, objects):
             return (-1, 0)
 
@@ -237,83 +238,129 @@ class XTableParser:
         t1 = xt1.tables[-1]
         t2 = xt2.tables[0]
 
-        #TODO 目前暂时限制为有边框，如果为无边框的，先去掉
-        #等到后续完善了无边框的跨页/跨栏列对齐
-        if t1.subtype!='ybk' or t2.subtype!='ybk':
-            return False
-        
-        if t1.subtype != t2.subtype:
-            # 必须全部是有边框或者无边框，否则拒绝
-            return False
 
-        if abs(t1.bbox.width - t2.bbox.width) >= 10:
-            return False
 
-        if t1.page.number == t2.page.number:
-            # 同页分栏
-            #    |[t2]
-            # [t1]|
-            # 极端情况
-            # [t1]|[t2]
-            s1 = t1.page.get_section(t1)
-            s2 = t2.page.get_section(t2)
-            if s1 is not s2:
+        def check_width(t1:KTable,t2:KTable)->bool:
+            if abs(t1.bbox.width - t2.bbox.width) >= 10:
                 return False
 
-            c1 = s1.get_column(t1.bbox)
-            c2 = s2.get_column(t2.bbox)
-            if c1 is None or c2 is None:
-                return False
+            if t1.page.number == t2.page.number:
+                # 同页分栏
+                #    |[t2]
+                # [t1]|
+                # 极端情况
+                # [t1]|[t2]
+                s1 = t1.page.get_section(t1)
+                s2 = t2.page.get_section(t2)
+                if s1 is not s2:
+                    return False
 
-            if c1.index + 1 != c2.index:
-                return False
+                c1 = s1.get_column(t1.bbox)
+                c2 = s2.get_column(t2.bbox)
+                if c1 is None or c2 is None:
+                    return False
 
-            if c2.bbox.y1 <= c1.bbox.y1 - 30:
-                return False
+                if c1.index + 1 != c2.index:
+                    return False
 
-            return True
+                if c2.bbox.y1 <= c1.bbox.y1 - 30:
+                    return False
 
-        elif t1.page.number + 1 == t2.page.number:
-            # 所在的页面必须一致
-            if abs(t1.page.width - t2.page.width) >= 5:
-                return False
-
-            # local/宁波核查文档解析-问题排查文件/pdfs/2023-03-13_国网国际融资租赁有限公司2023年度第二期超短期融资券募集说明书.pdf 54-55
-            # 差距比较大
-
-            # 跨页不分栏
-            # 跨页分栏
-
-            s1 = t1.page.get_section(t1)
-            s2 = t2.page.get_section(t2)
-            if not s1.alike(s2):
-                return False
-
-            c1 = s1.get_column(t1.bbox)
-            c2 = s2.get_column(t2.bbox)
-            if c1 is None or c2 is None:
-                return False
-
-            # t1比较和页面底部，t2比较和页面顶部的距离？
-
-            # 跨页不分栏
-            if c1.index == c2.index and c1.index == 0:
-                # --t1--
-                # -------
-                # --t2--
                 return True
 
-            elif c1.index + 1 == s1.col_num and c2.index == 0:
+            elif t1.page.number + 1 == t2.page.number:
+                # 所在的页面必须一致
+                if abs(t1.page.width - t2.page.width) >= 5:
+                    return False
+
+                # local/宁波核查文档解析-问题排查文件/pdfs/2023-03-13_国网国际融资租赁有限公司2023年度第二期超短期融资券募集说明书.pdf 54-55
+                # 差距比较大
+
+                # 跨页不分栏
                 # 跨页分栏
-                # ---|t1
-                # ---------跨页
-                # -t2|--
-                return True
 
+                s1 = t1.page.get_section(t1)
+                s2 = t2.page.get_section(t2)
+                if not s1.alike(s2):
+                    return False
+
+                c1 = s1.get_column(t1.bbox)
+                c2 = s2.get_column(t2.bbox)
+                if c1 is None or c2 is None:
+                    return False
+
+                # t1比较和页面底部，t2比较和页面顶部的距离？
+
+                # 跨页不分栏
+                if c1.index == c2.index and c1.index == 0:
+                    # --t1--
+                    # -------
+                    # --t2--
+                    return True
+
+                elif c1.index + 1 == s1.col_num and c2.index == 0:
+                    # 跨页分栏
+                    # ---|t1
+                    # ---------跨页
+                    # -t2|--
+                    return True
+
+                else:
+                    return False
             else:
                 return False
+        
+        def check_ybk(t1:KTable,t2:KTable)->bool:
+            #允许复杂的结构，t1和t2的列数不需要一致，也不需要对齐
+            return True
+        
+        def check_wbk(t1:KTable,t2:KTable)->bool:
+            #如果没有列对齐就合并，会出现很复杂的结构
+            c1=t1.chart_layout
+            c2=t2.chart_layout
+            if c1 and c2:
+                if c1.is_title() and c2.no_title():
+                    return True
+                elif c1.no_source() and c2.is_source():
+                    return True
+                else:
+                    return False
+            elif c1 and not c2:
+                return False
+            elif not c1 and c2:
+                return False
+            else:
+                return True
+        
+        def check_layout(t1:KTable,t2:KTable)->bool:
+            if t1.col_num!=t2.col_num:
+                return False
+            return True
+        
+        def check_hybrid(t1:KTable,t2:KTable)->bool:
+            """混合模式"""
+            #目前总是不支持
+            return False
+        
+        if not check_width(t1,t2):
+            #宽度不一致
+            return False
+
+        mode='all'
+        if t1.is_ybk() and t2.is_ybk() and mode in ('ybk','all'):
+            return check_ybk(t1,t2)
+        elif t1.is_wbk() and t2.is_wbk() and mode in ('wbk','all'):
+            return check_wbk(t1,t2)
+        elif t1.is_layout() and t2.is_layout() and mode in ('layout','all'):
+            return check_layout(t1,t2)
+        elif (t1.is_ybk() and t2.is_wbk() or t1.is_wbk() and t2.is_ybk()) and mode in ('hybrid','all'):
+            #允许混合类型的，如：t1.is_ybk() and t2.is_wbk() or t1.is_wbk() and t2.is_ybk()
+            #因为可能存在上一页使用ybk解析，下一页使用wbk解析，特别是对于彩色表格，部分有边框表格
+            return check_hybrid(t1,t2)
         else:
             return False
+
+        
 
     def _find_headers(self, xtables: Sequence[XTable], *, set_header: bool = False):
         """
@@ -439,6 +486,10 @@ class XTableParser:
             return 1
 
         assert len(xtables) > 1
+
+        if xtables[0].tables[0].is_layout() or xtables[1].tables[0].is_layout():
+            #如果是用来布局的表格，没有表头
+            return False
 
         xt1 = xtables[0]
         header = xt1.tables[-1].header
@@ -671,7 +722,6 @@ class _Builder:
         # 逐步合并的方式
         xtable: XTable = XTable.from_object(tables[0])
         xtable.working_tables = [tables[0]]
-
         # 0表示不使用，1表示仅仅测试一次，2表示每次都测试
         # 如果需要最完善的支持，使用2，可以支持部分表头分离
         batch_mode = 1
@@ -824,6 +874,30 @@ class _Builder:
         def is_blank(c: KCell) -> bool:
             return len(c.objects) == 0
 
+        def is_continue(noes:Sequence[int])->bool:
+            for k in range(1,len(noes)):
+                if noes[k-1]+1!=noes[k]:
+                    return False
+            return True
+        def has_no_and_blank(t:KTable,col_index:int)->bool:
+            blank_count=0
+            noes:list[int]=[]
+            for j in range(t.row_num):
+                s=t[j,col_index].text
+                if not s:
+                    blank_count+=1
+                else:
+                    try:
+                        k=int(s)
+                        noes.append(k)
+                    except ValueError:
+                        return False
+            if blank_count>0 and len(noes)>0 and is_continue(noes):
+                #严格的必须为连续的
+                return True
+            else:
+                return False
+
         if not use_batch():
             return None
 
@@ -865,9 +939,28 @@ class _Builder:
                     C(c2).reason = "c1和c2都是序号"
             elif is_no(C(c1).text2) and is_blank(c2):
                 # 如果为空格，就是需要合并
-                for c1, c2 in align_cells:
-                    C(c2).merged = True
-                    C(c2).reason = "c1为序号，c2为空"
+                #TODO 这个有例外的，如：
+                #[1][xx]
+                #---------------
+                #[ ][xx] =>不合并，从逻辑上，合并也没有错误，但是因为为有边框表格，且后面有不合并的案例，不合并更符合原意图
+                #[2][xx]
+                #[ ][xx]
+                #[3][xx]
+                #[4][xx]
+
+                if has_no_and_blank(c2.table,c2.col_index):
+                    if True:
+                        ok=False
+                        break
+                    else:
+                        for c1, c2 in align_cells:
+                            #TODO 不能够简单的判断为合并，还需要通过其他列判断
+                            C(c2).merged = False
+                            C(c2).reason = "c1为序号，c2为空，但是该列存在其他空白"
+                else:
+                    for c1, c2 in align_cells:
+                        C(c2).merged = True
+                        C(c2).reason = "c1为序号，c2为空"
             elif (
                 not is_blank(c1)
                 and not is_blank(c2)
@@ -1118,6 +1211,30 @@ class _Builder:
                         C(c2).reason = "t1为表头，c1和c2对齐"
             return True
 
+        def is_continue(noes:Sequence[int])->bool:
+            for k in range(1,len(noes)):
+                if noes[k-1]+1!=noes[k]:
+                    return False
+            return True
+        def has_no_and_blank(t:KTable,col_index:int)->bool:
+            blank_count=0
+            noes:list[int]=[]
+            for j in range(t.row_num):
+                s=t[j,col_index].text
+                if not s:
+                    blank_count+=1
+                else:
+                    try:
+                        k=int(s)
+                        noes.append(k)
+                    except ValueError:
+                        return False
+            if blank_count>0 and len(noes)>0 and is_continue(noes):
+                #严格的必须为连续的
+                return True
+            else:
+                return False
+
         def case0(i: int):
             """单行"""
             # 案例1:
@@ -1178,8 +1295,23 @@ class _Builder:
                 elif is_no(s1) and is_blank(c2):
                     # [xxx]c1
                     # [   ]c2
-                    C(c2).merged = True
-                    C(c2).reason = "c1为序号，c2空白"
+
+                    #TODO 这个有例外的，如：
+                    #[1][xx]
+                    #---------------
+                    #[ ][xx] =>不合并，从逻辑上，合并也没有错误，但是因为为有边框表格，且后面有不合并的案例，不合并更符合原意图
+                    #[2][xx]
+                    #[ ][xx]
+                    #[3][xx]
+                    #[4][xx]
+                    if has_no_and_blank(c2.table,c2.col_index):
+                        #待定？
+                        #C(c2).merged = False
+                        #C(c2).reason = "c1为序号，c2空白，但是该列允许序号为空"
+                        pass
+                    else:
+                        C(c2).merged = True
+                        C(c2).reason = "c1为序号，c2空白"
                 elif not is_blank(c1) and not is_blank(c2) and is_no(s1 + s2):
                     C(c2).merged = True
                     C(c2).reason = "c1+c2为序号"
@@ -1828,7 +1960,13 @@ class _Builder:
                 # 直接使用cell.bbox，填充更加准确
                 #TODO 可以考虑使用 cell.original_cell or cell
                 #这样，可以使用原始table的cell而不是body table的cell
-                items.insert(0, XItem(translate(cell.bbox, tx, ty),cell.original_cell or cell))
+                if cell.original_cell is not None:
+                    if cell.original_cell.table is not cell.table.main:
+                        #cell不是header或者body中的，而是另外的表格，通常来自strip，copy等
+                        self._logger.warning('第%s页的表格，original_cell指向其他',table.page.number)
+                    else:
+                        cell = cell.original_cell
+                items.insert(0, XItem(translate(cell.bbox, tx, ty),cell))
 
             offset_y += table.bbox.height
 

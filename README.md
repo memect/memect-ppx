@@ -42,7 +42,7 @@ $uv pip install memect-ppx
 #--headless  如果在docker等环境中，可能需要这个
 $ppx install
 #下载依赖的模型，因为需要从huggingface中下载，默认已经设置好代理，如果需要取消或者设置其他
-#export HF_ENDPOINT=xxx
+#export HF_ENDPOINT=https://huggingface.co
 $ppx download
 ```
 
@@ -415,6 +415,79 @@ CUDA requires NVIDIA driver + CUDA 12.x and `onnxruntime-gpu` built for that CUD
 
 ---
 
+## Docker Deployment
+
+```bash
+cp .env.sample .env
+docker compose up -d --build
+```
+
+If your build environment has slow access to the official Debian mirrors, set mirror overrides at build time only:
+
+```bash
+DEBIAN_MIRROR=https://mirrors.aliyun.com/debian \
+PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+docker compose build ppx
+```
+
+The CUDA image pins `onnxruntime-gpu` to `PPX_ONNXRUNTIME_GPU_VERSION=1.23.2` by default, preventing newer wheels that require CUDA 13 libraries from being installed alongside a CUDA 12 Python runtime.
+
+GPU services require the NVIDIA Container Toolkit on the host. Start them via the compose profile:
+
+```bash
+COMPOSE_PROFILES=gpu PPX_GPU_IMAGE=hub.wenyinhulian.cn/docparser/ppx-gpu:260702 PPX_GPU_DEVICE_ID=0 docker compose up -d ppx-gpu
+```
+
+On multi-GPU machines, use `PPX_GPU_DEVICE_ID=0` to select the host GPU.
+
+For production Linux GPU images, use the build script. The default output tag is `hub.wenyinhulian.cn/docparser/ppx-gpu:<YYMMDD>`, e.g. `hub.wenyinhulian.cn/docparser/ppx-gpu:260702`:
+
+```bash
+DEBIAN_MIRROR=https://mirrors.cloud.tencent.com/debian \
+PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+scripts/build-gpu-image.sh
+```
+
+The script also creates a local convenience alias `ppx:gpu`. To push to a private registry after logging in to Docker:
+
+```bash
+scripts/build-gpu-image.sh --push
+```
+
+To pin a specific tag:
+
+```bash
+PPX_IMAGE_TAG=260702 scripts/build-gpu-image.sh
+```
+
+By default, one `ppx` API/web service starts inside the container listening on port `9527`; the host port is controlled by `PPX_PORT`. Common mount directories:
+
+- `PPX_DATA_DIR_HOST`: uploads, tasks, and error files — default `./data`
+- `PPX_LOG_DIR_HOST`: log directory — default `./logs`
+- `PPX_CONF_DIR_HOST`: optional config directory — default `./conf`; place `settings.py` here to override defaults
+
+Common runtime variables:
+
+- `PPX_LOG_LEVEL`: log level — default `INFO`
+- `PPX_CPU`: force CPU for some or all models — `all`, `ocr`, `layout`, `table`, `formula`
+- `PPX_FORMULA`: formula recognition model — default `formula-pp`; also accepts `formula-mfr`, `paddle`, `glm`
+
+For PDF service settings (directories, file limits, task queue size), prefer `conf/settings.py` over environment variables:
+
+```python
+settings = {
+    "pdf_service.data_dir": "./data/pdf",
+    "pdf_service.task_manager.max_running_size": 4,
+    "pdf_service.pdf.max_page_count": 2000,
+}
+```
+
+External LLM services are configured via URL: `PPX_DEEPSEEK_URL`, `PPX_PADDLE_URL`, `PPX_GLM_URL`, `PPX_BAIDU_URL`. If the model service runs on the host, use `http://host.docker.internal:<port>/v1` inside Docker; if it is in the same compose network, use the service name instead.
+
+Avoid exposing this service directly to the public internet. The `/api/parse`, `/api/parse/state`, and `/admin/gc` endpoints are unauthenticated; in production, place the service behind an internal network or reverse proxy with authentication.
+
+---
+
 ## Launching LLM Services
 
 PPX LLM backends are served via [vLLM](https://github.com/vllm-project/vllm).
@@ -479,6 +552,46 @@ vllm serve ZhipuAI/GLM-OCR \
   --gpu-memory-utilization 0.5 \
   --port 4002
 ```
+
+## Train Layout Model
+
+```bash
+# Clone ppx or install it, then install PaddleX in the current directory
+$cd ppx
+$git clone https://github.com/PaddlePaddle/PaddleX.git
+# Use a proxy in China
+$git clone https://gh-proxy.org/https://github.com/PaddlePaddle/PaddleX.git
+
+$cd Paddlex
+$uv venv -p 3.12
+$source .venv/bin/activate
+# Check the official docs for the GPU version matching your setup
+$uv pip install paddlepaddle-gpu==3.3.0 --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+$uv pip install -e ".[base]"
+$uv pip install pip
+# Install the plugin
+$paddlex install PaddleOCR
+
+
+# Install labelme for image annotation
+$uv tool install labelme
+
+# Put the images to train on in the images directory
+$mkdir -p layout-project/images
+
+# Generate pre-annotations; supports "l" and "plus_l" models
+$./ppx train layout l --dir layout-project
+
+$cd layout-project & labelme images --labels label-l.txt --output labelme-l
+
+# Run training
+$./ppx train layout l --dir layout-project --device gpu:0  --export-onnx
+
+$./ppx train layout l --dir layout-project 
+
+```
+
+---
 
 ## FAQ
 

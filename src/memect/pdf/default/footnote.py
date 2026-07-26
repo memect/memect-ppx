@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from statistics import median
 from typing import Final, Sequence, TypeGuard
 
@@ -25,6 +26,10 @@ class PageFootnoteParser:
         r"source|data\s+source)\s*[:：]",
         flags=re.IGNORECASE,
     )
+    _circled_note_numbers: Final = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+    _circled_note_number_values: Final = {
+        char: value for value, char in enumerate(_circled_note_numbers, start=1)
+    }
 
     def __init__(self):
         super().__init__()
@@ -312,6 +317,19 @@ class PageFootnoteParser:
             return obj.text
         return ''
 
+    def _note_number_value(self, token: str) -> int | None:
+        if token.isdecimal():
+            return int(token)
+        number = self._circled_note_number_values.get(token)
+        if number is not None:
+            return number
+        if len(token) == 1:
+            try:
+                return unicodedata.digit(token)
+            except (TypeError, ValueError):
+                pass
+        return None
+
     def _looks_like_footnote_start(self, obj: KObject) -> bool:
         text = self._text(obj)
         if self._section_title_pattern.match(text):
@@ -443,7 +461,7 @@ class PageFootnoteParser:
             return [char for char in p.pdf_chars if bbox.contains(char.bbox.center)]
 
         def is_ref_char(text: str) -> bool:
-            return text.isdigit() or text in "①②③④⑤⑥⑦⑧⑨⑩"
+            return self._note_number_value(text) is not None
 
         def merge_digit_tokens(chars) -> list[str]:
             sorted_chars = sorted(chars, key=lambda char: (-char.bbox.cy, char.bbox.x0))
@@ -463,7 +481,7 @@ class PageFootnoteParser:
                     current.append(char)
                     continue
                 last = current[-1]
-                if last.text.isdigit() and char.text.isdigit():
+                if last.text.isdecimal() and char.text.isdecimal():
                     max_height = max(last.bbox.height, char.bbox.height, 1)
                     max_width = max(last.bbox.width, char.bbox.width, 1)
                     same_line = abs(last.bbox.cy - char.bbox.cy) <= max_height * 0.6
@@ -481,13 +499,20 @@ class PageFootnoteParser:
             tokens = merge_digit_tokens(chars_in_bbox(p, bbox))
             numbers: list[int] = []
             for token in tokens:
-                if token.isdigit():
-                    numbers.append(int(token))
+                number = self._note_number_value(token)
+                if number is not None:
+                    numbers.append(number)
             if numbers:
                 return numbers
 
             text = " ".join(self._text(obj).strip() for obj in texts)
-            return [int(v) for v in re.findall(r"(?<![\d.])(\d{1,3})(?!\.\d)", text)]
+            numbers.extend(int(v) for v in re.findall(r"(?<![\d.])(\d{1,3})(?!\.\d)", text))
+            numbers.extend(
+                number
+                for char in text
+                if not char.isdecimal() and (number := self._note_number_value(char)) is not None
+            )
+            return numbers
 
         def is_disordered(numbers: Sequence[int]) -> bool:
             return any(a > b for a, b in zip(numbers, numbers[1:]))
@@ -523,7 +548,12 @@ class PageFootnoteParser:
             return []
 
         refs = superscript_numbers_in_bbox(prev_page, table1.bbox) | superscript_numbers_in_bbox(page, table2.bbox)
-        if not ({str(number) for number in numbers} & refs):
+        ref_numbers = {
+            number
+            for ref in refs
+            if (number := self._note_number_value(ref)) is not None
+        }
+        if not (set(numbers) & ref_numbers):
             return []
 
         return [BBox.join2(texts)]

@@ -4,6 +4,7 @@ import math
 import random
 import re
 import threading
+import typing
 import uuid
 import weakref
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ from typing import (
     Any,
     ClassVar,
     Final,
+    Iterator,
     Mapping,
     NotRequired,
     Self,
@@ -35,11 +37,13 @@ from memect.base.bbox import BBox, Point, Quad
 from memect.base.matrix import Matrix
 from memect.base.strs import NText
 from memect.base.utils import AutoCleaner, MyBaseModel, safe_write
-from memect.pdf import chars
 from memect.pdf.grid import Grid
 from memect.base.zip import Archiver
 from memect.pdf.sort import Sorter
 
+
+if typing.TYPE_CHECKING:
+    from .model import ModelManager
 
 class PageParams(MyBaseModel):
     number: int = 1
@@ -53,6 +57,7 @@ class Backend(StrEnum):
     DEEPSEEK = auto()
     PADDLE = auto()
     GLM = auto()
+    BAIDU = auto()
 
 
 class PageType(StrEnum):
@@ -61,6 +66,9 @@ class PageType(StrEnum):
     IMAGE = auto()
     """表示完全作为图片解析，也就是所有字符都来自ocr"""
     UNKNOWN = auto()
+    """初始状态"""
+    HYBRID=auto()
+    """混合解析"""
 
 
 class CharSource(StrEnum):
@@ -169,6 +177,8 @@ class ApiParams(MyBaseModel):
 
     ocr: OCRMode = OCRMode.AUTO
 
+    features:list[str]=Field(default_factory=list)
+
 
 class ParseParams(ApiParams):
     api: bool = False
@@ -192,19 +202,32 @@ class VObjectType(StrEnum):
     """目录文本"""
     OTHER_TEXT = auto()
     """不重要的文本"""
-
     CODE = auto()
-
+    """代码"""
     FIGURE = auto()
+    """图片"""
     CHART = auto()
+    """图表"""
     TABLE = auto()
+    """表格"""
     SEAL = auto()
+    """印章"""
     FORMULA = auto()
+    """独立公式"""
     INLINE_FORMULA = auto()
-
+    """行内公式"""
     HEADER = auto()
+    """页眉文本"""
     FOOTER = auto()
+    """页脚文本"""
     FOOTNOTE = auto()
+    """脚注文本"""
+
+    HEADER_FIGURE=auto()
+    """页眉图片"""
+
+    FOOTER_FIGURE=auto()
+    """页脚图片"""
 
 
 class VObject:
@@ -221,7 +244,7 @@ class VObject:
         self.cache: Final[dict[str, Any]] = {}
         self.debug: Final[dict[str, Any]] = {}
         self.ocr_chars: Final[list[KChar]] = []
-        """该对象区域试验ocr识别的字符串"""
+        """该对象区域ocr识别的字符"""
         self.vobjects: Final[list[VObject]] = []
         """如果是表格，可以继续包含对象，如：图片等"""
         # self.pdf_chars:Final[list[KChar]]=[]
@@ -393,6 +416,20 @@ class KDocument:
         self.tree: XTree | None = None
         """章节树解析的结果"""
 
+        #from .model import ModelManager
+        self._model_manager=None
+    
+    @property
+    def model_manager(self)->'ModelManager|None':
+        if self._model_manager is not None:
+            return self._model_manager()
+        else:
+            return None
+    
+    @model_manager.setter
+    def manager(self,m:'ModelManager'):
+        self._model_manager = weakref.ref(m)
+    
     def __del__(self):
         # self._logger.debug("gc %s", self)
         pass
@@ -944,6 +981,10 @@ class KPage:
     def is_unknown(self) -> bool:
         """表示未知，也就是还没有解析"""
         return self.type == PageType.UNKNOWN
+    
+    def is_hybrid(self)->bool:
+        """混合"""
+        return self.type==PageType.HYBRID
 
     def clear(self):
         """解析完毕，清除不必要的内容"""
@@ -1005,7 +1046,7 @@ class KPage:
             img.save(fullpath)
         return img
 
-    def make_figure(self, quad: Quad | BBox, *, add: bool = False) -> "KFigure|None":
+    def make_figure(self, quad: Quad | BBox, *, add: bool = False,clear:bool=False) -> "KFigure|None":
         img = self.crop(quad)
         if img is None:
             return None
@@ -1014,12 +1055,16 @@ class KPage:
         figure = KFigure(self, quad, filename=filename)
         figure.fullpath.parent.mkdir(parents=True, exist_ok=True)
         img.save(figure.fullpath)
+
+        if clear:
+            figure.bbox.get(self.objects,ratio=0.8,remove=True)
+
         if add:
             self.objects.append(figure)
         return figure
 
     def make_formula(
-        self, quad: Quad, *, add: bool = False, inline: bool = False, latex: str = ""
+        self, quad: Quad|BBox, *, add: bool = False,clear:bool=False,inline: bool = False, latex: str = ""
     ):
         figure = self.make_figure(quad)
         if figure is None:
@@ -1027,9 +1072,23 @@ class KPage:
         formula = KFormula(
             self, quad, inline=inline, latex=latex, filename=figure.filename
         )
+        if clear:
+            formula.bbox.get(self.objects,ratio=0.8,remove=True)
         if add:
             self.objects.append(formula)
         return formula
+    
+    def make_table(self,quad:Quad|BBox,*,use_vobj:bool=False,add:bool=False,clear:bool=False,name:str='custom',index:int=0):
+        """创建一个表格"""
+        if isinstance(quad,Quad):
+            bbox=quad.bbox
+        else:
+            bbox=quad
+        from memect.pdf.default.table.wbk import Parser
+        #TODO 目前还是需要使用模型来获得结构，后续不使用模型了，直接根据规则解析？
+        manager = self.doc.model_manager
+        assert manager is not None
+        return Parser(manager).parse_one(self,bbox,use_vobj=use_vobj,add=add,clear=clear,name=name,index=index)
 
     def load_layout(self, data: Any, clear: bool = True):
         """
@@ -1209,11 +1268,11 @@ class KPage:
 
                 overlap_ratio = inter.area / vobj2.bbox.area
                 if overlap_ratio >= min_overlap_ratio:
-                    if vobj.is_table() and vobj2.is_any_text() and overlap_ratio<0.5 and vobj2.bbox.cy-vobj.bbox.y1>-2:
+                    if (vobj.is_table() or vobj.is_chart()) and vobj2.is_any_text() and overlap_ratio<0.5 and vobj2.bbox.cy-vobj.bbox.y1>-2:
                         #[---title--]
                         #[---table--]  =>如果稍微重叠一点，可以调整table的
                         self._logger.warning('第%s页，调整和表格重叠的文本,text=%s,table=%s',self.number,vobj2.bbox,vobj.bbox)
-                        vobj.set_bbox(vobj.bbox.adjust(y1=vobj2.bbox.y0))
+                        vobj.set_bbox(vobj.bbox.adjust(y1=vobj2.bbox.y0-1))
                     else:
                         # 超过一半区域重叠，如果类型相同？合并，如：都是文本类型
                         self._logger.warning(
@@ -1465,11 +1524,12 @@ class KPage:
             # "bbox": self.bbox.jsonify(),
             "width": self.width,
             "height": self.height,
-            #'header':{},
-            #'footer':{},
+            'header': self.header.jsonify(),
+            'footer': self.footer.jsonify(),
             #'footnotes':[],
             "objects": [],
         }
+
         if not lite:
             for obj in self.objects:
                 data["objects"].append(obj.jsonify())
@@ -1776,6 +1836,26 @@ class KColor:
 
     def jsonify(self) -> Any:
         return self.rgba[0:3]
+    
+    def __eq__(self,other:Any)->bool:
+        if other is self:
+            return True
+        if isinstance(other,KColor):
+            return self.rgba==other.rgba
+        else:
+            return False
+    
+    def __hash__(self)->int:
+        return hash(self.rgba)
+    
+    def hex(self)->str:
+        """返回这种格式ffaabb"""
+        r,g,b = self.rgba[0:3]
+        return f'{r:02x}{g:02x}{b:02x}'
+    
+    def hexa(self)->str:
+        r,g,b,a = self.rgba
+        return f'{r:02x}{g:02x}{b:02x}{a:02x}'
 
     @classmethod
     def from_list(
@@ -2660,8 +2740,9 @@ class KText(KObject):
         # 8. 移除转义符 (\* \# 等)
         text = re.sub(r"\\([`*_+\-!{}#.\\])", r"\1", text)
 
-        # 9. 行内公式（$xxx$）
+        # 9. 行内公式 "$xxx$" or "\(xxx\)"
         # 如何转换为文本？把公式扔了？或者不做改变？
+        # 有些上标或者下标也是使用行内公式表示
 
         return text
 
@@ -2689,6 +2770,30 @@ class KFigure(KObject):
             "filename": self.filename,
         }
 
+
+class TableIntent(StrEnum):
+    DATA=auto()
+    LAYOUT=auto()
+
+class ChartLayout:
+    def __init__(self,title:bool=False,body:bool=False,source:bool=False):
+        super().__init__()
+        self.title=title
+        self.body=body
+        self.source=source
+
+    def is_ok(self)->bool:
+        return self.title and self.body and self.source
+    def is_title(self)->bool:
+        return self.title and not self.body and not self.source
+    def is_source(self)->bool:
+        return self.source and not self.body and not self.title
+    
+    def no_source(self)->bool:
+        return self.body and not self.source
+    
+    def no_title(self)->bool:
+        return self.body and not self.title
 
 class KTable(KObject):
     type: str = "table"
@@ -2731,6 +2836,15 @@ class KTable(KObject):
 
         self.grid = self._create_grid()
 
+        #self.intent:TableIntent = TableIntent.DATA
+        #"""表示该表格的用途，如：layout"""
+
+        self.row_colors:list[KColor]=[]
+        self.col_colors:list[KColor]=[]
+
+        self.chart_layout:ChartLayout|None=None
+        """表示为图表布局，且获得对应的信息，方便跨页表格合并"""
+
     def _create_grid(self):
         # TODO 如果需要快速的访问，建立一个n*m的grid
         grid: list[list[KCell]] = []
@@ -2743,7 +2857,17 @@ class KTable(KObject):
                 for j in range(cell.col_index, cell.col_index + cell.col_span):
                     grid[i][j] = cell
         return grid
+    
+    def is_layout(self)->bool:
+        """表示表格的意图是布局"""
+        return self.subtype=='layout'
 
+    def is_wbk(self)->bool:
+        return self.subtype=='wbk'
+    
+    def is_ybk(self)->bool:
+        return self.subtype=='ybk'
+    
     @cached_property
     def fullpath(self) -> Path:
         """截图的完整路径"""
@@ -2976,8 +3100,11 @@ class KTable(KObject):
         for cell in self.cells:
             if start_row_index<=cell.row_index<end_row_index and start_col_index<=cell.col_index<end_col_index:
                 new_cells.append(cell)
-        
-        return self._from_cells(new_cells)
+        if len(new_cells)==0:
+            new_cells=[
+                KCell(self.page,self.bbox,row_index=0,col_index=0)
+            ]
+        return self._from_cells(new_cells,keep_original_cell=False)
         
 
     def get_stripped_size(self)->tuple[int,int]:
@@ -3016,7 +3143,7 @@ class KTable(KObject):
                 col_num-=1
         return (row_num,col_num)
 
-    def _from_cells(self,cells:Sequence["KCell"])->Self:
+    def _from_cells(self,cells:Sequence["KCell"],*,keep_original_cell:bool=True)->Self:
         """根据选择的部分单元格构造一个新的表格，重新计算单元格"""
         h_lines,v_lines = self._get_lines(cells)
         grid = Grid([line.bbox for line in h_lines+v_lines])
@@ -3024,6 +3151,8 @@ class KTable(KObject):
         new_cells:list[KCell]=[]
         for c1,c2 in zip(cells,grid.cells):
             cell = c1.copy(row_index=c2.row_index,col_index=c2.col_index,row_span=c2.row_span,col_span=c2.col_span)
+            if not keep_original_cell:
+                cell.original_cell=None
             new_cells.append(cell)
         return self.__class__(self.page,grid.bbox,cells=new_cells,subtype=self.subtype)
 
@@ -3036,6 +3165,8 @@ class KTable(KObject):
             "col_num": self.col_num,
             "cells": [c.jsonify() for c in self.cells],
         }
+        #ybk|wbk|layout
+        data['subtype']=self.subtype
         return data
 
     def markdown(self) -> str:
@@ -3194,8 +3325,11 @@ class KTable(KObject):
             # 有对象剩余？
             pass
 
-    def adjust(self):
+    def adjust(self,*,x0:float|None=None,x1:float|None=None):
         """表示调整一下cell的bbox，以便对齐，如果是来自有边框解析，不需要调用这个方法。这个方法合适构造了逻辑表格然后为了美观，调整一下"""
+
+        ref_x0:Final=x0
+        ref_x1:Final=x1
 
         def adjust_y():
             y1 = self.bbox.y1
@@ -3235,6 +3369,8 @@ class KTable(KObject):
 
         def adjust_x():
             x0 = self.bbox.x0
+            if ref_x0 is not None:
+                x0 = min(x0,ref_x0)
             for i in range(self.col_num):
                 #
                 column = self.get_column(i)
@@ -3257,6 +3393,8 @@ class KTable(KObject):
                     x1 = (a.x1 + b.x0) / 2
                 else:
                     x1 = self.bbox.x1
+                    if ref_x1 is not None:
+                        x1=max(x1,ref_x1)
 
                 for cell in column:
                     # 设置x
@@ -3272,6 +3410,49 @@ class KTable(KObject):
 
         adjust_y()
         adjust_x()
+
+        if x0 is not None or x1 is not None:
+            bbox = BBox.join2(self.cells)
+            self.bbox=bbox
+
+    def align(self,*,x_axis:Sequence[float]|None=None,y_axis:Sequence[float]|None=None,force:bool=False)->bool:
+        """根据新的坐标调整单元格的位置，返回False表示无法调整
+        x_axis:[x0,x1,x2,...] 
+        y_axis:[y0,y1,y2,...]
+        force: True表示强制设置，False表示如果新的单元格区域小于内容，就不调整
+
+        返回True表示调整了，返回False表示没有调整
+        """
+        if x_axis is not None:
+            assert len(x_axis)==self.col_num+1
+        
+        if y_axis is not None:
+            assert len(y_axis)==self.row_num+1
+
+        new_bboxes:list[BBox]=[]
+        for cell in self.cells:
+            x0=x_axis[cell.col_index] if x_axis else None
+            x1=x_axis[cell.col_index+cell.col_span] if x_axis else None
+            y0=y_axis[cell.row_index] if y_axis else None
+            y1=y_axis[cell.row_index+cell.row_span] if y_axis else None
+            b = cell.bbox.adjust(x0=x0,x1=x1,y0=y0,y1=y1)
+            cb = cell.content_bbox
+            if force or cb is None or b.get([cb],ratio=0.8):
+                #表示还是满足的，记录下来
+                new_bboxes.append(b)
+            else:
+                break
+        
+        if len(new_bboxes)!=len(self.cells):
+            return False
+        
+        #TODO cell.bbox不允许修改
+        for cell,bbox in zip(self.cells,new_bboxes):
+            cell.bbox = bbox   
+        #TODO 这个也不允许修改
+        self.bbox=BBox.join(new_bboxes)
+        return True
+
 
     def _validate(self, cells: Sequence["KCell"]):
         row_num = self.row_num
@@ -3298,6 +3479,16 @@ class KTable(KObject):
             raise ValueError(
                 f"第{self.page.number}页表格结构错误，缺少了行={a},缺少列={b}"
             )
+        
+        #重叠了
+        grid:list[list[Any]]=[ [None]*col_num for _ in range(row_num)]
+        for cell in cells:
+            for i in range(cell.row_index,cell.row_index+cell.row_span):
+                for j in range(cell.col_index,cell.col_index+cell.col_span):
+                    old_cell=grid[i][j]
+                    if old_cell is not None:
+                        raise ValueError(f'第{self.page.number}页表格结构错误，单元格重叠,cell1=({old_cell.row_index},{old_cell.col_index},{old_cell.row_span},{old_cell.col_span}),cell2=({cell.row_index},{cell.col_index},{cell.row_span},{cell.col_span})')
+                    grid[i][j]=cell
 
     @classmethod
     def create_table(
@@ -3538,6 +3729,11 @@ class KCell:
         self.merged:bool|None=None
         """True表示在跨页/跨栏的时候被合并"""
 
+        self.color:KColor|None=None
+        """设置或者获得单元格的背景颜色"""
+        self.font_color:KColor|None=None
+        """来自ocr的解析，可以通过这里获得字体颜色"""
+
         self.objects: Final[list[KObject]] = []
         if objects:
             self.objects.extend(objects)
@@ -3563,7 +3759,11 @@ class KCell:
             col_span = self.col_span
         if row_span is None:
             row_span = self.row_span
-        return self.__class__(self.page,self.bbox,row_index=row_index,col_index=col_index,row_span=row_span,col_span=col_span,objects=self.objects,original_cell=self)
+        cell = self.__class__(self.page,self.bbox,row_index=row_index,col_index=col_index,row_span=row_span,col_span=col_span,objects=self.objects,original_cell=self)
+        #TODO 需要复制吗？或者original_cell.color?
+        cell.color = self.color
+        cell.font_color = self.font_color
+        return cell
 
     def jsonify(self) -> Any:
         # 有些并不需要输出准确的bbox
@@ -3578,6 +3778,13 @@ class KCell:
             obj["bbox"] = self.bbox.jsonify()
         if self.objects:
             obj["objects"] = [obj.jsonify() for obj in self.objects]
+        
+        if self.color and not self.color.is_white():
+            obj['bg_color']=self.color.jsonify()
+        else:
+            #如果为白色，就不需要输出了
+            pass
+        
         return obj
 
 
@@ -3587,7 +3794,7 @@ class KFormula(KObject):
     def __init__(
         self,
         page: KPage,
-        quad: Quad,
+        quad: Quad|BBox,
         *,
         inline: bool = False,
         latex: str = "",
@@ -3738,6 +3945,13 @@ class KBlock(KObject):
         )
 
 
+    def expand(self)->Iterator[KObject]:
+        """展开"""
+        for obj in self.objects:
+            if isinstance(obj,KBlock):
+                yield from obj.expand()
+            else:
+                yield obj
 class KPageHeader(KObject):
     type = "pageheader"
 
@@ -3748,6 +3962,13 @@ class KPageHeader(KObject):
     @property
     def content_bbox(self) -> BBox | None:
         return BBox.join([obj.content_bbox for obj in self.objects],strict=False)
+    
+    @override
+    def jsonify(self)->Any:
+        return {
+            'bbox':self.bbox.jsonify(),
+            'objects':[obj.jsonify() for obj in self.objects]
+        }
 
 
 class KPageFooter(KObject):

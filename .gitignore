@@ -22,6 +22,8 @@
 !/.gitignore
 !/.dockerignore
 !/install
+!/scripts/
+!/scripts/build-gpu-image.sh
 !/.gitattributes
 !/CONTRIBUTING.md
 !/THIRD_PARTY_LICENSES.md

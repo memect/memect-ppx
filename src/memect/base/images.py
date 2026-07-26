@@ -2,10 +2,9 @@
 import base64
 import io
 import shutil
+import typing
 from pathlib import Path
 from typing import Sequence
-import typing
-
 
 import PIL
 import PIL.Image
@@ -222,8 +221,8 @@ def cv2_to_pil(image:'cv2.typing.MatLike',mode:str='rgb')->PIL.Image.Image:
 
 def pil_to_cv2(image:PIL.Image.Image)->'cv2.typing.MatLike':
     """PIL图片转换为cv2格式(BGR)"""
-    import numpy as np
     import cv2
+    import numpy as np
     if image.mode == 'RGBA':
         return cv2.cvtColor(np.array(image), cv2.COLOR_RGBA2BGRA)
     elif image.mode == 'RGB':
@@ -295,6 +294,54 @@ def hmerge(
         y = (max_height - img.height) // 2   # 垂直居中
         canvas.paste(img, (x, y))
         x += img.width + gap
+
+    if file is not None:
+        file=Path(file)
+        file.parent.mkdir(parents=True,exist_ok=True)
+        canvas.save(file)
+
+    return canvas
+
+def vmerge(
+    *images: str | Path | PIL.Image.Image,
+    file: str | Path | None = None,
+    gap: int = 0,
+    bg_color: tuple[int, int, int] = (255, 255, 255),
+) -> PIL.Image.Image:
+    """
+    垂直合并多张图片。
+
+    Args:
+        *images: 图片路径或 PIL.Image.Image 对象，支持混合传入。
+        file: 输出路径，为 None 时不保存。
+        gap: 图片间距（像素），默认 0。
+        bg_color: 背景色 RGB，默认白色 (255, 255, 255)。
+
+    Returns:
+        合并后的 PIL.Image.Image 对象。
+
+    Raises:
+        ValueError: images 为空时。
+    """
+    if not images:
+        raise ValueError("至少需要一张图片")
+
+    # 统一转换为 PIL.Image.Image
+    imgs: list[PIL.Image.Image] = [
+        img if isinstance(img, PIL.Image.Image) else PIL.Image.open(img)
+        for img in images
+    ]
+
+    total_height = sum(img.height for img in imgs) + gap * (len(imgs) - 1)
+    max_width = max(img.width for img in imgs)
+
+    canvas = PIL.Image.new("RGB", (max_width,total_height), bg_color)
+
+    y=0
+    for img in imgs:
+        x = (max_width - img.width) // 2   # 垂直居中
+        canvas.paste(img, (x, y))
+        y += img.height + gap
 
     if file is not None:
         file=Path(file)
