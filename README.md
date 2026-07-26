@@ -415,6 +415,79 @@ CUDA requires NVIDIA driver + CUDA 12.x and `onnxruntime-gpu` built for that CUD
 
 ---
 
+## Docker Deployment
+
+```bash
+cp .env.sample .env
+docker compose up -d --build
+```
+
+If your build environment has slow access to the official Debian mirrors, set mirror overrides at build time only:
+
+```bash
+DEBIAN_MIRROR=https://mirrors.aliyun.com/debian \
+PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+docker compose build ppx
+```
+
+The CUDA image pins `onnxruntime-gpu` to `PPX_ONNXRUNTIME_GPU_VERSION=1.23.2` by default, preventing newer wheels that require CUDA 13 libraries from being installed alongside a CUDA 12 Python runtime.
+
+GPU services require the NVIDIA Container Toolkit on the host. Start them via the compose profile:
+
+```bash
+COMPOSE_PROFILES=gpu PPX_GPU_IMAGE=hub.wenyinhulian.cn/docparser/ppx-gpu:260702 PPX_GPU_DEVICE_ID=0 docker compose up -d ppx-gpu
+```
+
+On multi-GPU machines, use `PPX_GPU_DEVICE_ID=0` to select the host GPU.
+
+For production Linux GPU images, use the build script. The default output tag is `hub.wenyinhulian.cn/docparser/ppx-gpu:<YYMMDD>`, e.g. `hub.wenyinhulian.cn/docparser/ppx-gpu:260702`:
+
+```bash
+DEBIAN_MIRROR=https://mirrors.cloud.tencent.com/debian \
+PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+scripts/build-gpu-image.sh
+```
+
+The script also creates a local convenience alias `ppx:gpu`. To push to a private registry after logging in to Docker:
+
+```bash
+scripts/build-gpu-image.sh --push
+```
+
+To pin a specific tag:
+
+```bash
+PPX_IMAGE_TAG=260702 scripts/build-gpu-image.sh
+```
+
+By default, one `ppx` API/web service starts inside the container listening on port `9527`; the host port is controlled by `PPX_PORT`. Common mount directories:
+
+- `PPX_DATA_DIR_HOST`: uploads, tasks, and error files — default `./data`
+- `PPX_LOG_DIR_HOST`: log directory — default `./logs`
+- `PPX_CONF_DIR_HOST`: optional config directory — default `./conf`; place `settings.py` here to override defaults
+
+Common runtime variables:
+
+- `PPX_LOG_LEVEL`: log level — default `INFO`
+- `PPX_CPU`: force CPU for some or all models — `all`, `ocr`, `layout`, `table`, `formula`
+- `PPX_FORMULA`: formula recognition model — default `formula-pp`; also accepts `formula-mfr`, `paddle`, `glm`
+
+For PDF service settings (directories, file limits, task queue size), prefer `conf/settings.py` over environment variables:
+
+```python
+settings = {
+    "pdf_service.data_dir": "./data/pdf",
+    "pdf_service.task_manager.max_running_size": 4,
+    "pdf_service.pdf.max_page_count": 2000,
+}
+```
+
+External LLM services are configured via URL: `PPX_DEEPSEEK_URL`, `PPX_PADDLE_URL`, `PPX_GLM_URL`, `PPX_BAIDU_URL`. If the model service runs on the host, use `http://host.docker.internal:<port>/v1` inside Docker; if it is in the same compose network, use the service name instead.
+
+Avoid exposing this service directly to the public internet. The `/api/parse`, `/api/parse/state`, and `/admin/gc` endpoints are unauthenticated; in production, place the service behind an internal network or reverse proxy with authentication.
+
+---
+
 ## Launching LLM Services
 
 PPX LLM backends are served via [vLLM](https://github.com/vllm-project/vllm).
@@ -479,6 +552,46 @@ vllm serve ZhipuAI/GLM-OCR \
   --gpu-memory-utilization 0.5 \
   --port 4002
 ```
+
+## Train Layout Model
+
+```bash
+# Clone ppx or install it, then install PaddleX in the current directory
+$cd ppx
+$git clone https://github.com/PaddlePaddle/PaddleX.git
+# Use a proxy in China
+$git clone https://gh-proxy.org/https://github.com/PaddlePaddle/PaddleX.git
+
+$cd Paddlex
+$uv venv -p 3.12
+$source .venv/bin/activate
+# Check the official docs for the GPU version matching your setup
+$uv pip install paddlepaddle-gpu==3.3.0 --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+$uv pip install -e ".[base]"
+$uv pip install pip
+# Install the plugin
+$paddlex install PaddleOCR
+
+
+# Install labelme for image annotation
+$uv tool install labelme
+
+# Put the images to train on in the images directory
+$mkdir -p layout-project/images
+
+# Generate pre-annotations; supports "l" and "plus_l" models
+$./ppx train layout l --dir layout-project
+
+$cd layout-project & labelme images --labels label-l.txt --output labelme-l
+
+# Run training
+$./ppx train layout l --dir layout-project --device gpu:0  --export-onnx
+
+$./ppx train layout l --dir layout-project 
+
+```
+
+---
 
 ## FAQ
 
@@ -569,113 +682,3 @@ PPX is released under the [PolyForm Noncommercial License 1.0.0](LICENSE).
 PPX is free for personal, research, and noncommercial use. For commercial use, contact `contact@memect.co`.
 
 For bundled third-party code and assets, see [NOTICE](NOTICE) and [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md). Those files document attribution and redistribution review items for vendored components and bundled resources shipped with this repository.
-
-## Docker 部署
-
-```bash
-cp .env.sample .env
-docker compose up -d --build
-```
-
-如果本机构建访问 Debian 官方源较慢，可只在构建阶段设置镜像源：
-
-```bash
-DEBIAN_MIRROR=https://mirrors.aliyun.com/debian \
-PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
-docker compose build ppx
-```
-
-CUDA 镜像默认把 `onnxruntime-gpu` 固定到 `PPX_ONNXRUNTIME_GPU_VERSION=1.23.2`，避免新版 wheel 需要 CUDA 13 动态库而当前安装的是 CUDA 12 Python 运行库。
-
-GPU 服务需要宿主机已安装 NVIDIA Container Toolkit，可用 compose profile 启动：
-
-```bash
-COMPOSE_PROFILES=gpu PPX_GPU_IMAGE=hub.wenyinhulian.cn/docparser/ppx-gpu:260702 PPX_GPU_DEVICE_ID=0 docker compose up -d ppx-gpu
-```
-
-多卡机器上可用 `PPX_GPU_DEVICE_ID=0` 选择宿主机显卡。
-
-正式 Linux GPU 镜像建议用脚本构建，默认产出 `hub.wenyinhulian.cn/docparser/ppx-gpu:<YYMMDD>`，例如 `hub.wenyinhulian.cn/docparser/ppx-gpu:260702`：
-
-```bash
-DEBIAN_MIRROR=https://mirrors.cloud.tencent.com/debian \
-PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
-scripts/build-gpu-image.sh
-```
-
-脚本同时会打一个本机便捷 alias `ppx:gpu`。发布到私有镜像仓库时可在 Docker 已登录后执行：
-
-```bash
-scripts/build-gpu-image.sh --push
-```
-
-需要固定 tag 时可显式指定：
-
-```bash
-PPX_IMAGE_TAG=260702 scripts/build-gpu-image.sh
-```
-
-默认启动一个 `ppx` API/Web 服务，容器内监听 `9527`，宿主端口由 `PPX_PORT` 控制。常用挂载目录：
-
-- `PPX_DATA_DIR_HOST`：上传、任务和错误文件，默认 `./data`
-- `PPX_LOG_DIR_HOST`：日志目录，默认 `./logs`
-- `PPX_CONF_DIR_HOST`：可选配置目录，默认 `./conf`，需要覆盖默认配置时放 `settings.py`
-
-常用运行变量：
-
-- `PPX_LOG_LEVEL`：日志级别，默认 `INFO`
-- `PPX_CPU`：强制 CPU，可设 `all`、`ocr`、`layout`、`table`、`formula`
-- `PPX_FORMULA`：公式识别模型，默认 `formula-pp`，也可设 `formula-mfr`、`paddle`、`glm`
-
-PDF 服务目录、文件限制、任务队列等业务配置不建议继续堆环境变量；按项目约定在 `conf/settings.py` 里只覆盖需要改的配置项。例如：
-
-```python
-settings = {
-    "pdf_service.data_dir": "./data/pdf",
-    "pdf_service.task_manager.max_running_size": 4,
-    "pdf_service.pdf.max_page_count": 2000,
-}
-```
-
-外部大模型服务通过 URL 配置：`PPX_DEEPSEEK_URL`、`PPX_PADDLE_URL`、`PPX_GLM_URL`、`PPX_BAIDU_URL`。如果模型服务跑在宿主机，Docker 内可使用 `http://host.docker.internal:<port>/v1`；如果跑在同一 compose 网络，改成对应服务名。
-
-安全上不建议把该服务直接暴露到公网。当前 `/api/parse`、`/api/parse/state`、`/admin/gc` 等接口未做鉴权，生产环境应放在内网或反向代理鉴权之后。
-
-
-## 训练布局模型
-
-```bash
-#可以clone ppx或者安装ppx，在当前目录上安装PaddleX
-$cd ppx
-$git clone https://github.com/PaddlePaddle/PaddleX.git
-#国内走代理
-$git clone https://gh-proxy.org/https://github.com/PaddlePaddle/PaddleX.git
-
-$cd Paddlex
-$uv venv -p 3.12
-$source .venv/bin/activate
-#查看官方文档安装对应的gpu版本
-$uv pip install paddlepaddle-gpu==3.3.0 --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
-$uv pip install -e ".[base]"
-$uv pip install pip
-#安装plugin
-$paddlex install PaddleOCR
-
-
-#安装labelme，标注图片
-$uv tool install labelme
-
-#把需要训练的图片放在images目录下
-$mkdir -p layout-project/images
-
-#生成预标注，支持"l","plus_l"模型
-$./ppx train layout l --dir layout-project
-
-$cd layout-project & labelme images --labels label-l.txt --output labelme-l
-
-#执行训练
-$./ppx train layout l --dir layout-project --device gpu:0  --export-onnx
-
-$./ppx train layout l --dir layout-project 
-
-```
