@@ -4,7 +4,7 @@ from typing import Any, Final, Sequence, cast
 from memect.base.bbox import BBox
 from memect.pdf.base import KChar, KColor, KDocument, KFigure, KFormula, KObject, KPage, KRect, KSection, KSpan, KTable, KText, KTextline, TableIntent
 from memect.pdf.x.xbase import XBlock, XFigure, XFormula, XSection, XTable, XText
-from .model import Document, Paragraph, Picture, Section, SectionMargins, TableCell
+from .model import Document, Paragraph, Picture, Section, SectionMargins, TableCell, VerticalAlignment
 from .units import pt, twip
 
 
@@ -213,16 +213,83 @@ class DocxBuilder:
 
         return doc.to_bytes()
 
+    def _get_margins(self,doc:KDocument)->tuple[float,float]:
+        """获得页面上下左右的留空，返回(left,top)，left/right一致，top和bottom一致"""
+
+        #有些pdf的页面是复制粘帖过来的，页面的页边距并不一致
+        #这里使用统一的
+        left_list:list[float]=[]
+        right_list:list[float]=[]
+        for page in doc.working_pages:
+            #TODO 需要区分纵向和横向吗？
+            if page.objects:
+                cb = BBox.join2(page.objects)
+                left_list.append(cb.x0)
+                right_list.append(page.width-cb.x1)
+
+        if not left_list:
+            #
+            return (90,72)
+
+        left=min(left_list)
+        right=max(right_list)
+        #至少为10
+        return (max(int(min(left,right,90)),10),72)
+     
+
+    def _get_header_footer(self,doc:KDocument,section:Section):
+        def get_alignment(obj:KObject)->str:
+            bbox = obj.bbox
+            d=bbox.x0-(obj.page.width-bbox.x1)
+            if abs(d)<=20:
+                return 'center'
+            elif d<0:
+                return 'left'
+            else:
+                return 'right'
+        texts:dict[str,list[KText]]={}
+        page_number_templates:dict[str,list[KText]]={}
+        figures=[]
+        for page in doc.working_pages:
+            for obj in page.header.objects:
+                if isinstance(obj,KText):
+                    page_number_template=None
+                    if is_footer:
+                        page_number_template=get_page_number_template(obj)
+                        if page_number_template:
+                            page_number_templates.setdefault(obj.text,[]).append(obj)
+
+                    if page_number_template is None:
+                        texts.setdefault(obj.text,[]).append(obj)
+                elif isinstance(obj,KFigure):
+                    figures.append(obj)
+
+        if len(texts)>0:
+            text=sorted(texts.items(),key=lambda item:len(item[1]),reverse=True)[0][1][0]
+
+        if len(figures)>0:
+            #如果有图片，找到位置一致的即可
+            pass
+
+
+        section.header.add_parts()
+        section.footer.add_parts()
+
+
     def _render_tree(self, kdoc: KDocument, doc: Document):
         # 按节输出
         # 首页（没有页眉页脚）
 
         assert kdoc.tree is not None
 
+        #整个文档使用统一的margins，即使有些页面有差别
+        margins = self._get_margins(kdoc)
+        #整个文档使用统一的header/footer，即使有些页面有区别
+
         header_done=False
         first = True
         for ksection in kdoc.tree.get_sections():
-            self._render_xsection(doc, ksection)
+            self._render_xsection(doc, ksection,margins)
             if first:
                 # 把自动生成的删除
                 first = False
@@ -233,24 +300,19 @@ class DocxBuilder:
                 #现在不追求，只使用一个，也就是仅仅在第一节设置
                 #可以有多个不同的节（section），但是所有的节都适用同一个header/footer（不再特别设置）
                 #也不追求100%遵循原文
-                header_done = self._render_header_footer(doc.sections[-1],ksection)
+                header_done = self._render_header_footer(doc.sections[-1],ksection,margins)
 
-    def _render_header_footer(self,section:Section,ksection:XSection)->bool:
+    def _render_header_footer(self,section:Section,ksection:XSection,margins:tuple[float,float])->bool:
         
-        for page in ksection.pages:
-            if page.header.objects or page.footer.objects:
-                pass
-
         def get_page()->KPage|None:
             #找到对象最多的一个，因为有些首页使用特别的设置，或者有些多个页面复制粘帖过来，混乱的
-
+            #或者只需要出现次数最多的文本或者图片（位置一致即可，因为可能使用截图）
+            #或者页码的格式
             pages = sorted(ksection.pages,key=lambda page:(len(page.header.objects),len(page.footer.objects)))
             if not pages:
                 return None
 
             return pages[-1]
-
-
 
         def get_alignment(obj:KObject)->str:
             bbox = obj.bbox
@@ -310,7 +372,7 @@ class DocxBuilder:
 
             #去掉左右空白即可？
             #width = max(page.width-180,BBox.join2(objects).width)
-            width = page.width-180
+            width = max(page.width/2,page.width-2*margins[0])
             if is_header:
                 section.header.add_parts(left=left,center=center,right=right,width=pt(width)) 
             else:
@@ -331,7 +393,7 @@ class DocxBuilder:
         return True
 
     def _render_xsection(
-        self, doc: Document, xsection: XSection
+        self, doc: Document, xsection: XSection,margins:tuple[float,float]
     ):
 
         def is_A4(width: float, height: float) -> bool:
@@ -346,6 +408,7 @@ class DocxBuilder:
                 return False
         
 
+       
 
         #下面这些，每一节都必须设置，因为不会继承，如果没有设置，使用schema默认值
         #纸张大小: 不会继承上一节的，如果没有设置，使用schema的默认
@@ -382,12 +445,12 @@ class DocxBuilder:
         # 如果是A4横向，典型的也如上
 
         #现在使用统一的页边距，即使原文有所不同
-        margins = SectionMargins()
-        margins.left=pt(90)
-        margins.right=pt(90)
-        margins.top=pt(72)
-        margins.bottom=pt(72)
-        section = doc.add_section(start=xsection.start, columns=xsection.col_num,page_width=page_width,page_height=page_height,orientation=orientation,margins=margins)
+        pt_margins = SectionMargins()
+        pt_margins.left=pt(margins[0])
+        pt_margins.right=pt(margins[0])
+        pt_margins.top=pt(margins[1])
+        pt_margins.bottom=pt(margins[1])
+        section = doc.add_section(start=xsection.start, columns=xsection.col_num,page_width=page_width,page_height=page_height,orientation=orientation,margins=pt_margins)
 
         #如果是目录章节
         is_toc=False
@@ -431,7 +494,8 @@ class DocxBuilder:
             if xtext.node.is_title() and xtext.no is not None:
                 #表示为标题，判断是否有序号，可以添加序号
                 #这个仅仅允许1-3级，而且自动设置style=Heading1-3
-                sec.add_heading(xtext.text,level=1)
+                #使用这个，就支持toc自动生成
+                sec.add_heading(xtext.text,level=xtext.node.level)
                 #sec.add_list_item('xxx')
             else:
                 fontsize=10
@@ -460,19 +524,24 @@ class DocxBuilder:
             #为了避免在整个段落中，字体大小差异过大，这里使用统一的字体即可
             #如果是黑色，就不需要设置字体颜色了
             #如果对象的间距过大，补充空格？
-            def fill_spaces(p:Paragraph,index:int,objs:Sequence[KObject]):
+            def fill_spaces(p:Paragraph,index:int,objs:Sequence[KObject],fontsize:float=10):
                 if index==0:
                     return
                 obj1 = objs[index-1]
                 obj2 = objs[index]
                 #如果为同一行，且间距过大
-                n=int((obj2.bbox.x1-obj1.bbox.x0)//10)
+                n=int((obj2.bbox.x0-obj1.bbox.x1)//fontsize)
                 if n>0:
-                    p.add_run(' '*n,size=10)
+                    p.add_run(' '*n,size=fontsize)
+
+            #如果是多行的，判断是否首行缩进
+            #如果是不跨页的，容易判断
+            #如果是跨页的，也容易判断
+            #如果是跨栏的，判断就困难了
 
             p=sec.add_paragraph()
             for i,obj in enumerate(objs):
-                #fill_spaces(p,i,objs)
+                fill_spaces(p,i,objs)
                 if isinstance(obj,KSpan):
                     span = obj
                     if not span.color.is_black():
@@ -492,28 +561,55 @@ class DocxBuilder:
 
     def _render_xtable(self, sec: Section, xtable: XTable):
 
-        def render_object(tc:TableCell,obj:KObject):
+        def render_object(tc:TableCell,obj:KObject,inner_table:bool=False):
             if isinstance(obj,KText):
-                tc.add_paragraph(obj.text)
+                #设置fontsize
+                #如果是最后一个paragraph，设置line
+                p=tc.add_paragraph('')
+                if not inner_table and xtable.is_layout():
+                    p.format.alignment='left'
+                    #TODO 应该使用self.render_xtext()
+                    p.add_run(text=obj.text,size=pt(10))
+                elif not inner_table and  (xtable.is_wbk() and xtable.tables[0].chart_layout is not None):
+                    p.format.alignment='left'
+                    p.add_run(text=obj.text,size=pt(10))
+                else:
+                    p.format.space_after=pt(0)
+                    p.format.space_before=pt(0)
+                    if len(obj.lines)>1:
+                        p.format.alignment='left'
+                    else:
+                        p.format.alignment='center'
+                    p.add_run(text=obj.text,size=pt(8))
             elif isinstance(obj,KFigure):
-                tc.add_picture(obj.fullpath)
+                p=tc.add_picture(obj.fullpath,width=pt(obj.bbox.width),height=pt(obj.bbox.height),alignment='center')
+                p.format.space_before=pt(0)
+                p.format.space_after=pt(0)
             elif isinstance(obj,KFormula):
-                tc.add_picture(obj.fullpath)
+                p=tc.add_picture(obj.fullpath,width=pt(obj.bbox.width),height=pt(obj.bbox.height))
+                p.format.space_before=pt(0)
+                p.format.space_after=pt(0)
             elif isinstance(obj,KTable):
-                render_table(tc,obj)
+                render_table(tc,obj,inner_table=True)
             else:
                 pass
 
-        def render_table(parent:TableCell,ktable:KTable):
+        def render_table(parent:TableCell,ktable:KTable,inner_table:bool=False):
             cells:list[TableCell]=[]
             for cell in ktable.cells:
-                tc = TableCell(width=pt(cell.bbox.width),row_index=cell.row_index,col_index=cell.col_index,row_span=cell.row_span,col_span=cell.col_span)
+                tc = TableCell(width=pt(cell.bbox.width),row_index=cell.row_index,col_index=cell.col_index,row_span=cell.row_span,col_span=cell.col_span,vertical_align='center')
                 cells.append(tc)
+                
                 for obj in cell.objects:
-                    render_object(tc,obj)
+                    render_object(tc,obj,inner_table=inner_table)
                     
-            
-            parent.add_table(rows=ktable.row_num,cols=ktable.col_num,cells=cells,alignment='center')
+                color = cell.color
+                font_color = cell.font_color
+                if color is not None:
+                    tc.set_shading(color.hex())
+
+            table=parent.add_table(rows=ktable.row_num,cols=ktable.col_num,cells=cells,alignment='center')
+            table.width=pt(ktable.bbox.width)
         
 
         #获得表格的style
@@ -522,6 +618,7 @@ class DocxBuilder:
         #交替颜色：
         
         cells: list[TableCell] = []
+        print('========>Kkk',xtable.is_layout(),xtable.row_num,xtable.col_num)
         for cell in xtable.cells:
             # 这个为逻辑上的bbox
             # cell.bbox
@@ -538,6 +635,7 @@ class DocxBuilder:
                 row_span=cell.row_span,
                 col_span=cell.col_span,
                 width=width,
+                vertical_align= None if xtable.is_layout() else 'center'
             )
             color = cell.color
             font_color = cell.font_color
@@ -551,6 +649,8 @@ class DocxBuilder:
 
         # TODO 还需要设置是否表头重复，跨页断行
         table = sec.add_table(rows=xtable.row_num, cols=xtable.col_num, cells=cells,style=None,alignment='center',borders=xtable.is_ybk())
+        assert xtable.bbox is not None
+        table.width=pt(xtable.bbox.width)
         if xtable.tables[0].header is not None:
             #表头重复
             table.set_repeat_header_rows(xtable.tables[0].header.row_num)
