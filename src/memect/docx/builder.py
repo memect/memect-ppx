@@ -618,7 +618,6 @@ class DocxBuilder:
         #交替颜色：
         
         cells: list[TableCell] = []
-        print('========>Kkk',xtable.is_layout(),xtable.row_num,xtable.col_num)
         for cell in xtable.cells:
             # 这个为逻辑上的bbox
             # cell.bbox
