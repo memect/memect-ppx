@@ -396,10 +396,20 @@ def _find_paddlex_root(root: Path | None) -> Path:
             return candidate
         raise typer.BadParameter(f"PaddleX源码目录无效: {candidate}")
 
-    for candidate in (Path("./PaddleX"), Path("../PaddleX")):
-        candidate = candidate.expanduser().resolve()
+    current = Path.cwd().resolve()
+    while True:
+        if _is_paddlex_root(current):
+            return current
+
+        candidate = current / "PaddleX"
         if _is_paddlex_root(candidate):
-            return candidate
+            return candidate.resolve()
+
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
     raise typer.BadParameter("找不到PaddleX源码目录，请用--paddlex-root指定")
 
 
@@ -410,12 +420,12 @@ def _resolve_python(python: Path | None, paddlex_root: Path | None = None) -> st
             raise typer.BadParameter(f"Python解释器不存在: {path}")
         return str(path)
     if paddlex_root is not None:
-        for candidate in (
-            paddlex_root / ".venv" / "bin" / "python3",
-            paddlex_root / ".venv" / "bin" / "python",
-        ):
-            if candidate.is_file():
-                return str(candidate)
+        bin_dir = paddlex_root / ".venv" / "bin"
+        if bin_dir.is_dir():
+            for name in ("python", "python3"):
+                candidate = bin_dir / name
+                if candidate.is_file():
+                    return str(candidate.resolve())
     return sys.executable
 
 
@@ -843,13 +853,13 @@ def label(
 def train(
     root: Annotated[Path, typer.Option("--root", "-r", help="工作目录")] = DEFAULT_ROOT,
     device: Annotated[str, typer.Option(help="PaddleX训练设备，如cpu或gpu:0")] = "gpu:0",
-    epochs: Annotated[int, typer.Option("--epochs",help="训练轮数")] = 10,
+    epochs: Annotated[int, typer.Option("--epochs", "--ephos", help="训练轮数")] = 10,
     batch_size: Annotated[int, typer.Option(help="训练batch size")] = 24,
     images: Annotated[Path, typer.Option(help="训练图片目录")] = Path("images"),
     labels: Annotated[Path, typer.Option(help="LabelMe标注目录")] = Path("labels"),
     val_ratio: Annotated[float, typer.Option(help="验证集比例")] = 0.1,
     seed: Annotated[int, typer.Option(help="训练/验证划分随机种子")] = 2026,
-    paddlex_root: Annotated[Path | None, typer.Option(help="PaddleX源码目录，默认查找./PaddleX和../PaddleX")] = None,
+    paddlex_root: Annotated[Path | None, typer.Option(help="PaddleX源码目录，默认从当前目录向上查找")] = None,
     python: Annotated[Path | None, typer.Option(help="执行PaddleX的Python解释器")] = None,
     config: Annotated[Path | None, typer.Option(help="PaddleX配置文件")] = None,
     output: Annotated[Path | None, typer.Option(help="训练输出目录，默认trains/runs/<timestamp>")] = None,
