@@ -959,7 +959,6 @@ def train(
 
     base_overrides = [
         "Global.model=PicoDet_layout_1x_table",
-        "Global.export_with_pir=False",
         "Train.num_classes=1",
         f"Train.epochs_iters={epochs}",
         f"Train.batch_size={batch_size}",
@@ -1159,7 +1158,6 @@ def export_model(
     config_path = _resolve_paddlex_config(root, paddlex, config)
     export_dir = root / "trains" / "exports" / time.strftime("%Y%m%d_%H%M%S")
     export_overrides = [
-        "Global.export_with_pir=False",
         f"Export.weight_path={weight_path.resolve()}",
     ]
     _run_subprocess(
