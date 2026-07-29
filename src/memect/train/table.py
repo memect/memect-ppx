@@ -25,7 +25,10 @@ app = typer.Typer(no_args_is_help=True,help='表格识别训练')
 MODEL_NAME = "PicoDet_layout_1x_table"
 LABEL = "Table"
 DEFAULT_ROOT = Path("./table-train")
-PADDLEX_LEGACY_MODEL_ENV = {"FLAGS_json_format_model": "0"}
+PADDLEX_LEGACY_MODEL_ENV = {
+    "FLAGS_json_format_model": "0",
+    "FLAGS_enable_pir_api": "0",
+}
 
 INFER_URL = (
     "https://paddle-model-ecology.bj.bcebos.com/paddlex/"
