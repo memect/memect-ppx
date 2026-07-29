@@ -25,6 +25,7 @@ app = typer.Typer(no_args_is_help=True,help='表格识别训练')
 MODEL_NAME = "PicoDet_layout_1x_table"
 LABEL = "Table"
 DEFAULT_ROOT = Path("./table-train")
+PADDLEX_LEGACY_MODEL_ENV = {"FLAGS_json_format_model": "0"}
 
 INFER_URL = (
     "https://paddle-model-ecology.bj.bcebos.com/paddlex/"
@@ -485,14 +486,21 @@ def _run_subprocess(
     cwd: Path,
     dry_run: bool,
     stage: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> None:
     if stage:
         _echo(f"==> {stage} cwd={cwd}")
+    if env:
+        _echo("env: " + shlex.join(f"{key}={value}" for key, value in env.items()))
     _echo(shlex.join(str(part) for part in cmd))
     if dry_run:
         return
+    subprocess_env = None
+    if env is not None:
+        subprocess_env = os.environ.copy()
+        subprocess_env.update(env)
     try:
-        subprocess.check_call(list(cmd), cwd=cwd)
+        subprocess.check_call(list(cmd), cwd=cwd, env=subprocess_env)
     except subprocess.CalledProcessError as exc:
         if stage:
             _echo(f"<== {stage} failed: exit {exc.returncode}")
@@ -642,6 +650,20 @@ def _is_paddle_inference_dir(path: Path) -> bool:
     )
 
 
+def _paddle2onnx_model_filename(inference_dir: Path, *, dry_run: bool) -> str:
+    if (inference_dir / "inference.pdmodel").is_file():
+        return "inference.pdmodel"
+    if (inference_dir / "inference.json").is_file():
+        raise typer.BadParameter(
+            "当前Paddle inference目录只有inference.json(PIR格式)，"
+            "此格式在PicoDet_layout_1x_table上可能触发paddle2onnx PIR解析错误；"
+            "请用训练输出目录或pdparams checkpoint重新执行export生成inference.pdmodel"
+        )
+    if dry_run:
+        return "inference.pdmodel"
+    raise typer.BadParameter(f"找不到inference.pdmodel: {inference_dir}")
+
+
 def _resolve_paddle2onnx_command(
     python_cmd: str,
     paddle2onnx: Path | None,
@@ -679,7 +701,7 @@ def _convert_paddle_inference_to_onnx(
     if out_file.exists() and not force:
         raise typer.BadParameter(f"{out_file} 已存在，请加--force覆盖")
 
-    model_filename = "inference.json" if (inference_dir / "inference.json").is_file() else "inference.pdmodel"
+    model_filename = _paddle2onnx_model_filename(inference_dir, dry_run=dry_run)
     cmd = [
         *_resolve_paddle2onnx_command(python_cmd, paddle2onnx, cwd=cwd),
         "--model_dir",
@@ -937,6 +959,7 @@ def train(
 
     base_overrides = [
         "Global.model=PicoDet_layout_1x_table",
+        "Global.export_with_pir=False",
         "Train.num_classes=1",
         f"Train.epochs_iters={epochs}",
         f"Train.batch_size={batch_size}",
@@ -986,6 +1009,7 @@ def train(
         cwd=paddlex,
         dry_run=dry_run,
         stage="train",
+        env=PADDLEX_LEGACY_MODEL_ENV,
     )
     _write_latest_run(root, run_dir)
 
@@ -1134,7 +1158,10 @@ def export_model(
     weight_path = _resolve_weight_path(model_path)
     config_path = _resolve_paddlex_config(root, paddlex, config)
     export_dir = root / "trains" / "exports" / time.strftime("%Y%m%d_%H%M%S")
-    export_overrides = [f"Export.weight_path={weight_path.resolve()}"]
+    export_overrides = [
+        "Global.export_with_pir=False",
+        f"Export.weight_path={weight_path.resolve()}",
+    ]
     _run_subprocess(
         _paddlex_command(
             python_cmd=python_cmd,
@@ -1148,6 +1175,7 @@ def export_model(
         cwd=paddlex,
         dry_run=dry_run,
         stage="export",
+        env=PADDLEX_LEGACY_MODEL_ENV,
     )
 
     inference_dir = _find_inference_dir(export_dir)
