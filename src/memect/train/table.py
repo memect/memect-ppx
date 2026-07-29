@@ -424,12 +424,24 @@ def _resolve_python(python: Path | None, paddlex_root: Path | None = None) -> st
             raise typer.BadParameter(f"Python解释器不存在: {path}")
         return str(path)
     if paddlex_root is not None:
-        bin_dir = paddlex_root / ".venv" / "bin"
-        if bin_dir.is_dir():
-            for name in ("python", "python3"):
-                candidate = bin_dir / name
-                if candidate.is_file():
-                    return str(candidate.resolve())
+        if os.name == "nt":
+            candidates = (
+                Path(".venv") / "Scripts" / "python.exe",
+                Path(".venv") / "Scripts" / "python",
+            )
+        else:
+            candidates = (
+                Path(".venv") / "bin" / "python",
+                Path(".venv") / "bin" / "python3",
+            )
+        for relative in candidates:
+            if (paddlex_root / relative).is_file():
+                return str(relative)
+        expected = ".venv\\Scripts\\python.exe" if os.name == "nt" else ".venv/bin/python"
+        raise typer.BadParameter(
+            f"找不到PaddleX虚拟环境Python: {paddlex_root / expected}；"
+            "请先在PaddleX目录创建.venv，或通过--python指定解释器"
+        )
     return sys.executable
 
 
@@ -466,11 +478,21 @@ def _resolve_paddlex_config(
     return path
 
 
-def _run_subprocess(cmd: Sequence[str], *, cwd: Path, dry_run: bool) -> None:
+def _run_subprocess(
+    cmd: Sequence[str],
+    *,
+    cwd: Path,
+    dry_run: bool,
+    stage: str | None = None,
+) -> None:
+    if stage:
+        _echo(f"==> {stage} cwd={cwd}")
     _echo(" ".join(str(part) for part in cmd))
     if dry_run:
         return
     subprocess.check_call(list(cmd), cwd=cwd)
+    if stage:
+        _echo(f"<== {stage} done")
 
 
 def _resolve_executable(command: str) -> str:
@@ -660,7 +682,7 @@ def _convert_paddle_inference_to_onnx(
     ]
     if onnx_opset is not None:
         cmd.extend(["--opset_version", str(onnx_opset)])
-    _run_subprocess(cmd, cwd=inference_dir, dry_run=dry_run)
+    _run_subprocess(cmd, cwd=inference_dir, dry_run=dry_run, stage="paddle2onnx")
     _copy_inference_yml(inference_dir, output_dir, dry_run=dry_run)
     return out_file
 
@@ -870,6 +892,7 @@ def train(
     resume: Annotated[Path | None, typer.Option(help="PaddleX Train.resume_path")] = None,
     overrides: Annotated[list[str] | None, typer.Option("--set", help="额外PaddleX -o参数")] = None,
     skip_check: Annotated[bool, typer.Option(help="跳过check_dataset")] = False,
+    check_only: Annotated[bool, typer.Option(help="只执行check_dataset，不执行训练")] = False,
     skip_eval: Annotated[bool, typer.Option(help="跳过evaluate")] = False,
     skip_predict: Annotated[bool, typer.Option(help="跳过训练后的predict")] = False,
     dry_run: Annotated[bool, typer.Option(help="只打印命令，不执行")] = False,
@@ -926,7 +949,11 @@ def train(
             ),
             cwd=paddlex,
             dry_run=dry_run,
+            stage="check_dataset",
         )
+        if check_only:
+            _echo("check_only: skip train/evaluate/predict")
+            return
 
     _run_subprocess(
         _paddlex_command(
@@ -941,6 +968,7 @@ def train(
         ),
         cwd=paddlex,
         dry_run=dry_run,
+        stage="train",
     )
     _write_latest_run(root, run_dir)
 
@@ -963,6 +991,7 @@ def train(
             ),
             cwd=paddlex,
             dry_run=dry_run,
+            stage="evaluate",
         )
 
     if not skip_predict:
@@ -988,6 +1017,7 @@ def train(
                 ),
                 cwd=paddlex,
                 dry_run=dry_run,
+                stage="predict",
             )
         else:
             _echo("skip predict: 未找到训练图片或Paddle inference目录")
@@ -1100,6 +1130,7 @@ def export_model(
         ),
         cwd=paddlex,
         dry_run=dry_run,
+        stage="export",
     )
 
     inference_dir = _find_inference_dir(export_dir)
