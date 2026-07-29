@@ -607,7 +607,7 @@ def _resolve_default_model(root: Path) -> Path:
     for candidate in candidates:
         if candidate.is_file() and candidate.suffix in {".onnx", ".pdparams"}:
             return candidate
-        if any(path.is_file() for path in _candidate_weight_paths(candidate)):
+        if _find_weight_path(candidate) is not None:
             return candidate
         inference_dir = _find_inference_dir(candidate)
         if inference_dir is not None and (inference_dir / "inference.pdmodel").is_file():
@@ -631,11 +631,36 @@ def _candidate_weight_paths(model: Path) -> list[Path]:
     ]
 
 
-def _resolve_weight_path(model: Path) -> Path:
+def _find_weight_path(model: Path) -> Path | None:
     for path in _candidate_weight_paths(model):
         if path.is_file() and path.suffix == ".pdparams":
             return path.resolve()
+    return None
+
+
+def _resolve_weight_path(model: Path) -> Path:
+    path = _find_weight_path(model)
+    if path is not None:
+        return path
     raise typer.BadParameter(f"找不到可导出的pdparams权重: {model}")
+
+
+def _find_train_config_path(model: Path, weight_path: Path) -> Path | None:
+    candidates: list[Path] = []
+    if model.is_dir():
+        candidates.extend([model / "config.yaml", model.parent / "config.yaml"])
+    else:
+        candidates.extend([model.parent / "config.yaml", model.parent.parent / "config.yaml"])
+    candidates.extend(
+        [
+            weight_path.parent / "config.yaml",
+            weight_path.parent.parent / "config.yaml",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
 
 
 def _find_inference_dir(path: Path) -> Path | None:
@@ -1154,8 +1179,11 @@ def export_model(
 
     paddlex = _find_paddlex_root(paddlex_root)
     python_cmd = _resolve_python(python, paddlex)
-    inference_dir = _find_inference_dir(model_path)
-    if inference_dir is not None:
+    weight_path = _find_weight_path(model_path)
+    if weight_path is None:
+        inference_dir = _find_inference_dir(model_path)
+        if inference_dir is None:
+            raise typer.BadParameter(f"找不到可导出的模型: {model_path}")
         out_file = _convert_paddle_inference_to_onnx(
             inference_dir=inference_dir,
             output_dir=output_dir,
@@ -1169,12 +1197,17 @@ def export_model(
         _echo(f"onnx: {out_file}")
         return
 
-    weight_path = _resolve_weight_path(model_path)
     config_path = _resolve_paddlex_config(root, paddlex, config)
     export_dir = root / "trains" / "exports" / time.strftime("%Y%m%d_%H%M%S")
     export_overrides = [
         f"Export.weight_path={weight_path.resolve()}",
     ]
+    train_config_path = _find_train_config_path(model_path, weight_path)
+    if train_config_path is not None:
+        export_overrides.append(f"Export.basic_config_path={train_config_path}")
+        _echo(f"train_config: {train_config_path}")
+    else:
+        _echo("warning: 未找到训练config.yaml，PaddleX export将使用默认结构")
     _run_subprocess(
         _paddlex_command(
             python_cmd=python_cmd,
