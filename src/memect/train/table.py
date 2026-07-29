@@ -29,6 +29,7 @@ PADDLEX_LEGACY_MODEL_ENV = {
     #"FLAGS_json_format_model": "0",
     #"FLAGS_enable_pir_api": "0",
 }
+PADDLE2ONNX_ENV = {"FLAGS_enable_pir_api": "0"}
 
 INFER_URL = (
     "https://paddle-model-ecology.bj.bcebos.com/paddlex/"
@@ -590,25 +591,33 @@ def _run_dirs(root: Path) -> list[Path]:
 
 
 def _resolve_default_model(root: Path) -> Path:
+    candidates: list[Path] = []
     latest = _latest_run_file(root)
     if latest.is_file():
         path = Path(latest.read_text(encoding="utf-8").strip()).expanduser()
         if path.exists():
-            return path.resolve()
+            candidates.append(path.resolve())
 
     link = root / "trains" / "latest"
     if link.exists():
-        return link.resolve()
+        candidates.append(link.resolve())
 
-    runs = _run_dirs(root)
-    if runs:
-        return runs[-1].resolve()
+    candidates.extend(reversed(_run_dirs(root)))
+
+    for candidate in candidates:
+        if candidate.is_file() and candidate.suffix in {".onnx", ".pdparams"}:
+            return candidate
+        if any(path.is_file() for path in _candidate_weight_paths(candidate)):
+            return candidate
+        inference_dir = _find_inference_dir(candidate)
+        if inference_dir is not None and (inference_dir / "inference.pdmodel").is_file():
+            return candidate
 
     infer_dir = _infer_dir(root)
     if infer_dir.is_dir():
         return infer_dir.resolve()
 
-    raise typer.BadParameter("没有找到默认模型，请使用--model指定")
+    raise typer.BadParameter("没有找到默认模型，请先执行train/download，或用--model指定训练输出目录/pdparams/onnx")
 
 
 def _candidate_weight_paths(model: Path) -> list[Path]:
@@ -657,11 +666,7 @@ def _paddle2onnx_model_filename(inference_dir: Path, *, dry_run: bool) -> str:
     if (inference_dir / "inference.pdmodel").is_file():
         return "inference.pdmodel"
     if (inference_dir / "inference.json").is_file():
-        raise typer.BadParameter(
-            "当前Paddle inference目录只有inference.json(PIR格式)，"
-            "此格式在PicoDet_layout_1x_table上可能触发paddle2onnx PIR解析错误；"
-            "请用训练输出目录或pdparams checkpoint重新执行export生成inference.pdmodel"
-        )
+        return "inference.json"
     if dry_run:
         return "inference.pdmodel"
     raise typer.BadParameter(f"找不到inference.pdmodel: {inference_dir}")
@@ -718,7 +723,13 @@ def _convert_paddle_inference_to_onnx(
     ]
     if onnx_opset is not None:
         cmd.extend(["--opset_version", str(onnx_opset)])
-    _run_subprocess(cmd, cwd=cwd, dry_run=dry_run, stage="paddle2onnx")
+    _run_subprocess(
+        cmd,
+        cwd=cwd,
+        dry_run=dry_run,
+        stage="paddle2onnx",
+        env=PADDLE2ONNX_ENV,
+    )
     _copy_inference_yml(inference_dir, output_dir, dry_run=dry_run)
     return out_file
 
@@ -1013,7 +1024,8 @@ def train(
         stage="train",
         env=None#PADDLEX_LEGACY_MODEL_ENV,
     )
-    _write_latest_run(root, run_dir)
+    if not dry_run:
+        _write_latest_run(root, run_dir)
 
     best_weight = run_dir / "best_model" / "best_model.pdparams"
     if not skip_eval:
