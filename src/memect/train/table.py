@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import random
+import shlex
 import shutil
 import subprocess
 import sys
@@ -487,7 +488,7 @@ def _run_subprocess(
 ) -> None:
     if stage:
         _echo(f"==> {stage} cwd={cwd}")
-    _echo(" ".join(str(part) for part in cmd))
+    _echo(shlex.join(str(part) for part in cmd))
     if dry_run:
         return
     try:
@@ -641,7 +642,12 @@ def _is_paddle_inference_dir(path: Path) -> bool:
     )
 
 
-def _resolve_paddle2onnx_command(python_cmd: str, paddle2onnx: Path | None) -> list[str]:
+def _resolve_paddle2onnx_command(
+    python_cmd: str,
+    paddle2onnx: Path | None,
+    *,
+    cwd: Path,
+) -> list[str]:
     if paddle2onnx is not None:
         path = paddle2onnx.expanduser().resolve()
         if not path.is_file():
@@ -649,13 +655,12 @@ def _resolve_paddle2onnx_command(python_cmd: str, paddle2onnx: Path | None) -> l
         return [str(path)]
 
     python_path = Path(python_cmd)
-    for candidate in (python_path.parent / "paddle2onnx", python_path.parent / "paddle2onnx.exe"):
+    python_dir = python_path.parent if python_path.is_absolute() else cwd / python_path.parent
+    for name in ("paddle2onnx", "paddle2onnx.exe", "paddle2onnx.cmd", "paddle2onnx.bat"):
+        candidate = python_dir / name
         if candidate.is_file():
             return [str(candidate)]
-    found = shutil.which("paddle2onnx")
-    if found:
-        return [found]
-    return [python_cmd, "-m", "paddle2onnx"]
+    return [python_cmd, "-c", "from paddle2onnx.command import main; main()"]
 
 
 def _convert_paddle_inference_to_onnx(
@@ -676,7 +681,7 @@ def _convert_paddle_inference_to_onnx(
 
     model_filename = "inference.json" if (inference_dir / "inference.json").is_file() else "inference.pdmodel"
     cmd = [
-        *_resolve_paddle2onnx_command(python_cmd, paddle2onnx),
+        *_resolve_paddle2onnx_command(python_cmd, paddle2onnx, cwd=cwd),
         "--model_dir",
         str(inference_dir.resolve()),
         "--model_filename",
