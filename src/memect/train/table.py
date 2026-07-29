@@ -25,11 +25,6 @@ app = typer.Typer(no_args_is_help=True,help='表格识别训练')
 MODEL_NAME = "PicoDet_layout_1x_table"
 LABEL = "Table"
 DEFAULT_ROOT = Path("./table-train")
-PADDLEX_LEGACY_MODEL_ENV = {
-    #"FLAGS_json_format_model": "0",
-    #"FLAGS_enable_pir_api": "0",
-}
-PADDLE2ONNX_ENV = {"FLAGS_enable_pir_api": "0"}
 
 INFER_URL = (
     "https://paddle-model-ecology.bj.bcebos.com/paddlex/"
@@ -753,7 +748,6 @@ def _convert_paddle_inference_to_onnx(
         cwd=cwd,
         dry_run=dry_run,
         stage="paddle2onnx",
-        env=PADDLE2ONNX_ENV,
     )
     _copy_inference_yml(inference_dir, output_dir, dry_run=dry_run)
     return out_file
@@ -1047,7 +1041,6 @@ def train(
         cwd=paddlex,
         dry_run=dry_run,
         stage="train",
-        env=None#PADDLEX_LEGACY_MODEL_ENV,
     )
     if not dry_run:
         _write_latest_run(root, run_dir)
@@ -1221,7 +1214,6 @@ def export_model(
         cwd=paddlex,
         dry_run=dry_run,
         stage="export",
-        env=PADDLEX_LEGACY_MODEL_ENV,
     )
 
     inference_dir = _find_inference_dir(export_dir)
