@@ -490,7 +490,12 @@ def _run_subprocess(
     _echo(" ".join(str(part) for part in cmd))
     if dry_run:
         return
-    subprocess.check_call(list(cmd), cwd=cwd)
+    try:
+        subprocess.check_call(list(cmd), cwd=cwd)
+    except subprocess.CalledProcessError as exc:
+        if stage:
+            _echo(f"<== {stage} failed: exit {exc.returncode}")
+        raise typer.Exit(exc.returncode) from exc
     if stage:
         _echo(f"<== {stage} done")
 
@@ -658,6 +663,7 @@ def _convert_paddle_inference_to_onnx(
     inference_dir: Path,
     output_dir: Path,
     python_cmd: str,
+    cwd: Path,
     paddle2onnx: Path | None,
     onnx_opset: int | None,
     force: bool,
@@ -682,7 +688,7 @@ def _convert_paddle_inference_to_onnx(
     ]
     if onnx_opset is not None:
         cmd.extend(["--opset_version", str(onnx_opset)])
-    _run_subprocess(cmd, cwd=inference_dir, dry_run=dry_run, stage="paddle2onnx")
+    _run_subprocess(cmd, cwd=cwd, dry_run=dry_run, stage="paddle2onnx")
     _copy_inference_yml(inference_dir, output_dir, dry_run=dry_run)
     return out_file
 
@@ -955,6 +961,12 @@ def train(
             _echo("check_only: skip train/evaluate/predict")
             return
 
+    _echo(
+        "note: PaddleX may print "
+        f"\"The model({MODEL_NAME}) don't support to update_static_assigner_epochs!\"; "
+        "for this model it is an informational message, not a train failure."
+    )
+    _echo(f"train_log: {run_dir / 'train.log'}")
     _run_subprocess(
         _paddlex_command(
             python_cmd=python_cmd,
@@ -1097,13 +1109,15 @@ def export_model(
         _echo(f"onnx: {out_file}")
         return
 
+    paddlex = _find_paddlex_root(paddlex_root)
+    python_cmd = _resolve_python(python, paddlex)
     inference_dir = _find_inference_dir(model_path)
-    python_cmd = _resolve_python(python, None)
     if inference_dir is not None:
         out_file = _convert_paddle_inference_to_onnx(
             inference_dir=inference_dir,
             output_dir=output_dir,
             python_cmd=python_cmd,
+            cwd=paddlex,
             paddle2onnx=paddle2onnx,
             onnx_opset=onnx_opset,
             force=force,
@@ -1113,8 +1127,6 @@ def export_model(
         return
 
     weight_path = _resolve_weight_path(model_path)
-    paddlex = _find_paddlex_root(paddlex_root)
-    python_cmd = _resolve_python(python, paddlex)
     config_path = _resolve_paddlex_config(root, paddlex, config)
     export_dir = root / "trains" / "exports" / time.strftime("%Y%m%d_%H%M%S")
     export_overrides = [f"Export.weight_path={weight_path.resolve()}"]
@@ -1144,6 +1156,7 @@ def export_model(
         inference_dir=inference_dir,
         output_dir=output_dir,
         python_cmd=python_cmd,
+        cwd=paddlex,
         paddle2onnx=paddle2onnx,
         onnx_opset=onnx_opset,
         force=force,
