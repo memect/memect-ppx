@@ -235,7 +235,9 @@ class DocxBuilder:
         right=max(right_list)
         #至少为10
         return (max(int(min(left,right,90)),10),72)
-     
+
+    def _get_font_sizes(self):
+        pass
 
     def _get_header_footer(self,doc:KDocument,section:Section):
         def get_alignment(obj:KObject)->str:

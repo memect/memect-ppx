@@ -12,6 +12,7 @@ import typer
 
 from .pdf.base import Backend, OCRMode, ParseMode, TableMode, TreeBackend
 from .train.layout import layout as layout_train_command
+from .train.table import app as table_app
 
 app:Final= typer.Typer()
 train_app: Final = typer.Typer(help="训练")
@@ -20,6 +21,7 @@ train_app.command("layout", help="基于PP-DocLayout预标注并训练版面检�
     layout_train_command
 )
 app.add_typer(train_app, name="train")
+app.add_typer(table_app,name='table')
 _DOCTOR_DEFAULT = "__ppx_default_doctor__"
 _AGENT_DEFAULT = "./agent.json"
 
