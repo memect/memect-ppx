@@ -393,17 +393,21 @@ def _find_paddlex_root(root: Path | None) -> Path:
     if root is not None:
         candidate = root.expanduser().resolve()
         if _is_paddlex_root(candidate):
+            _echo(f"PaddleX: {candidate}")
             return candidate
         raise typer.BadParameter(f"PaddleX源码目录无效: {candidate}")
 
     current = Path.cwd().resolve()
     while True:
         if _is_paddlex_root(current):
+            _echo(f"PaddleX: {current}")
             return current
 
         candidate = current / "PaddleX"
         if _is_paddlex_root(candidate):
-            return candidate.resolve()
+            resolved = candidate.resolve()
+            _echo(f"PaddleX: {resolved}")
+            return resolved
 
         parent = current.parent
         if parent == current:
@@ -853,7 +857,7 @@ def label(
 def train(
     root: Annotated[Path, typer.Option("--root", "-r", help="工作目录")] = DEFAULT_ROOT,
     device: Annotated[str, typer.Option(help="PaddleX训练设备，如cpu或gpu:0")] = "gpu:0",
-    epochs: Annotated[int, typer.Option("--epochs", "--ephos", help="训练轮数")] = 10,
+    epochs: Annotated[int, typer.Option("--epochs", help="训练轮数")] = 10,
     batch_size: Annotated[int, typer.Option(help="训练batch size")] = 24,
     images: Annotated[Path, typer.Option(help="训练图片目录")] = Path("images"),
     labels: Annotated[Path, typer.Option(help="LabelMe标注目录")] = Path("labels"),
