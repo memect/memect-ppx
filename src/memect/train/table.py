@@ -1087,8 +1087,11 @@ def label(
 def train(
     root: Annotated[Path, typer.Option("--root", "-r", help="工作目录")] = DEFAULT_ROOT,
     device: Annotated[str, typer.Option(help="PaddleX训练设备，如cpu或gpu:0")] = "gpu:0",
-    epochs: Annotated[int, typer.Option("--epochs", help="训练轮数")] = 10,
-    batch_size: Annotated[int, typer.Option(help="训练batch size")] = 24,
+    epochs: Annotated[int | None, typer.Option("--epochs", help="训练轮数，默认使用YAML配置")] = None,
+    batch_size: Annotated[
+        int | None,
+        typer.Option(help="训练batch size，默认min(24, 训练集图片数)"),
+    ] = None,
     images: Annotated[Path, typer.Option(help="训练图片目录")] = Path("images"),
     labels: Annotated[Path, typer.Option(help="LabelMe标注目录")] = Path("labels"),
     val_ratio: Annotated[float, typer.Option(help="验证集比例")] = 0.1,
@@ -1121,6 +1124,10 @@ def train(
         seed=seed,
     )
     _echo(json.dumps(stats, ensure_ascii=False, indent=2))
+    if epochs is not None and epochs <= 0:
+        raise typer.BadParameter("--epochs 必须大于0")
+    if batch_size is not None and batch_size <= 0:
+        raise typer.BadParameter("--batch-size 必须大于0")
 
     paddlex = _find_paddlex_root(paddlex_root)
     python_cmd = _resolve_python(python, paddlex)
@@ -1132,16 +1139,22 @@ def train(
     )
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    base_overrides = [
+    model_overrides = [
         "Global.model=PicoDet_layout_1x_table",
         "Train.num_classes=1",
-        f"Train.epochs_iters={epochs}",
-        f"Train.batch_size={batch_size}",
+    ]
+    train_image_count = int(stats["train"]["images"])
+    effective_batch_size = batch_size if batch_size is not None else min(24, train_image_count)
+    train_overrides = [
+        *model_overrides,
+        f"Train.batch_size={effective_batch_size}",
         f"Train.pretrain_weight_path={_pretrained_path(root).resolve()}",
     ]
+    if epochs is not None:
+        train_overrides.append(f"Train.epochs_iters={epochs}")
     if resume is not None:
-        base_overrides.append(f"Train.resume_path={resume.expanduser().resolve()}")
-    base_overrides.extend(overrides or [])
+        train_overrides.append(f"Train.resume_path={resume.expanduser().resolve()}")
+    train_overrides.extend(overrides or [])
 
     if not skip_check:
         _run_subprocess(
@@ -1153,7 +1166,7 @@ def train(
                 dataset_dir=dataset_dir,
                 output_dir=run_dir,
                 device=device,
-                overrides=base_overrides,
+                overrides=train_overrides,
             ),
             cwd=paddlex,
             dry_run=dry_run,
@@ -1178,7 +1191,7 @@ def train(
             dataset_dir=dataset_dir,
             output_dir=run_dir,
             device=device,
-            overrides=base_overrides,
+            overrides=train_overrides,
         ),
         cwd=paddlex,
         dry_run=dry_run,
@@ -1190,6 +1203,7 @@ def train(
     best_weight = run_dir / "best_model" / "best_model.pdparams"
     if not skip_eval:
         eval_overrides = [
+            *model_overrides,
             *(overrides or []),
             f"Evaluate.weight_path={best_weight.resolve()}",
         ]
@@ -1214,6 +1228,7 @@ def train(
         inference_dir = _find_inference_dir(run_dir)
         if image_candidates and (inference_dir is not None or dry_run):
             predict_overrides = [
+                *model_overrides,
                 *(overrides or []),
                 f"Predict.input={image_candidates[0].resolve()}",
             ]
