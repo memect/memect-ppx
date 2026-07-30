@@ -479,6 +479,45 @@ def _resolve_paddlex_config(
     return path
 
 
+def _write_export_paddlex_config(
+    *,
+    base_config: Path,
+    export_dir: Path,
+    train_config: Path,
+) -> Path:
+    data = yaml.safe_load(base_config.read_text(encoding="utf-8")) or {}
+    export_config = data.setdefault("Export", {})
+    if not isinstance(export_config, dict):
+        raise typer.BadParameter(f"PaddleX配置Export字段无效: {base_config}")
+    export_config["basic_config_path"] = str(train_config.resolve())
+
+    export_dir.mkdir(parents=True, exist_ok=True)
+    path = export_dir / "paddlex_export.yaml"
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _ensure_weight_config(
+    *,
+    weight_path: Path,
+    train_config: Path,
+    dry_run: bool,
+) -> None:
+    target = weight_path.parent / "config.yaml"
+    if target.is_file():
+        return
+    _echo(f"weight_config: {target} <- {train_config}")
+    if dry_run:
+        return
+    try:
+        shutil.copy2(train_config, target)
+    except OSError as exc:
+        _echo(f"warning: 无法写入权重同目录config.yaml: {exc}")
+
+
 def _run_subprocess(
     cmd: Sequence[str],
     *,
@@ -1197,8 +1236,18 @@ def export_model(
     ]
     train_config_path = _find_train_config_path(model_path, weight_path)
     if train_config_path is not None:
-        config_path = train_config_path
+        _ensure_weight_config(
+            weight_path=weight_path,
+            train_config=train_config_path,
+            dry_run=dry_run,
+        )
+        config_path = _write_export_paddlex_config(
+            base_config=config_path,
+            export_dir=export_dir,
+            train_config=train_config_path,
+        )
         _echo(f"train_config: {train_config_path}")
+        _echo(f"export_config: {config_path}")
     else:
         _echo("warning: 未找到训练config.yaml，PaddleX export将使用默认结构")
     _run_subprocess(
