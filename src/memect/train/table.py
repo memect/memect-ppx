@@ -731,6 +731,104 @@ def _paddle2onnx_model_filename(inference_dir: Path, *, dry_run: bool) -> str:
     raise typer.BadParameter(f"找不到inference.pdmodel: {inference_dir}")
 
 
+def _attr_by_name(op: dict[str, Any], name: str) -> dict[str, Any] | None:
+    attrs = op.get("A")
+    if not isinstance(attrs, list):
+        return None
+    for item in attrs:
+        if not isinstance(item, dict) or item.get("N") != name:
+            continue
+        attr = item.get("AT")
+        if isinstance(attr, dict):
+            return attr
+    return None
+
+
+def _normalize_pir_json_for_paddle2onnx(json_path: Path, *, write: bool = True) -> int:
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    program = data.get("program", {})
+    regions = program.get("regions", []) if isinstance(program, dict) else []
+    blocks = (
+        regions[0].get("blocks", [])
+        if regions and isinstance(regions[0], dict)
+        else []
+    )
+    ops = blocks[0].get("ops", []) if blocks and isinstance(blocks[0], dict) else []
+    if not isinstance(ops, list):
+        return 0
+
+    changed = 0
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        op_type = op.get("#")
+        if op_type == "1.nearest_interp":
+            scale = _attr_by_name(op, "scale")
+            values = scale.get("D") if isinstance(scale, dict) else None
+            if isinstance(values, list):
+                for value in values:
+                    if isinstance(value, dict) and value.get("#") == "0.a_f64":
+                        value["#"] = "0.a_f32"
+                        changed += 1
+        elif op_type == "1.pool2d":
+            for attr_name in ("strides", "paddings"):
+                attr = _attr_by_name(op, attr_name)
+                values = attr.get("D") if isinstance(attr, dict) else None
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    if (
+                        isinstance(value, dict)
+                        and value.get("#") == "0.a_i64"
+                        and isinstance(value.get("D"), int)
+                        and -(2**31) <= value["D"] < 2**31
+                    ):
+                        value["#"] = "0.a_i32"
+                        changed += 1
+
+    if changed and write:
+        json_path.write_text(
+            json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    return changed
+
+
+def _prepare_paddle2onnx_inference_dir(
+    inference_dir: Path,
+    output_dir: Path,
+    *,
+    dry_run: bool,
+) -> Path:
+    json_path = inference_dir / "inference.json"
+    if not json_path.is_file():
+        return inference_dir
+
+    compat_dir = output_dir / "paddle2onnx_compat"
+    if dry_run:
+        changed = _normalize_pir_json_for_paddle2onnx(json_path, write=False)
+        if changed:
+            _echo(
+                f"paddle2onnx_compat: would normalize {changed} PIR attrs "
+                f"in {compat_dir / 'inference.json'}"
+            )
+            return compat_dir
+        return inference_dir
+
+    if compat_dir.exists():
+        shutil.rmtree(compat_dir)
+    shutil.copytree(inference_dir, compat_dir)
+    changed = _normalize_pir_json_for_paddle2onnx(compat_dir / "inference.json")
+    if changed:
+        _echo(
+            f"paddle2onnx_compat: normalized {changed} PIR attrs "
+            f"in {compat_dir / 'inference.json'}"
+        )
+        return compat_dir
+    shutil.rmtree(compat_dir)
+    return inference_dir
+
+
 def _resolve_paddle2onnx_command(
     python_cmd: str,
     paddle2onnx: Path | None,
@@ -769,10 +867,15 @@ def _convert_paddle_inference_to_onnx(
         raise typer.BadParameter(f"{out_file} 已存在，请加--force覆盖")
 
     model_filename = _paddle2onnx_model_filename(inference_dir, dry_run=dry_run)
+    convert_dir = _prepare_paddle2onnx_inference_dir(
+        inference_dir,
+        output_dir,
+        dry_run=dry_run,
+    )
     cmd = [
         *_resolve_paddle2onnx_command(python_cmd, paddle2onnx, cwd=cwd),
         "--model_dir",
-        str(inference_dir.resolve()),
+        str(convert_dir.resolve()),
         "--model_filename",
         model_filename,
         "--params_filename",
