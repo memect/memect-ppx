@@ -1197,7 +1197,7 @@ def export_model(
     ]
     train_config_path = _find_train_config_path(model_path, weight_path)
     if train_config_path is not None:
-        export_overrides.append(f"Export.basic_config_path={train_config_path}")
+        config_path = train_config_path
         _echo(f"train_config: {train_config_path}")
     else:
         _echo("warning: 未找到训练config.yaml，PaddleX export将使用默认结构")
