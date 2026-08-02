@@ -24,6 +24,10 @@ _models: dict[str, Any] = {
         "sha256": "c267cafe004067be73c44cc3aa7990f34e1026c467464372fa6843500f5da1c2",
         "verified": False,
     },
+    "360":{
+        "modelscope":"Memect/360",
+        "verified":False
+    },
     # TODO 这两个公式模型后续需要去掉
     "mfr": {"huggingface": "breezedeus/pix2text-mfr-1.5", "verified": False},
     "PP-FormulaNet_plus-M_infer": {
@@ -219,6 +223,7 @@ def download_layout():
     get_model_path("PP-DocLayout-V3")
     get_model_path("PP-DocLayout-L")
     get_model_path("PP-DocLayout_plus-L")
+    get_model_path("360")
 
 
 def download_table():

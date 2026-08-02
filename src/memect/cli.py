@@ -341,7 +341,8 @@ def parse(
     tree:Annotated[TreeBackend|None,typer.Option(help='如何解析章节树')]=None,
     feature:Annotated[str|None,typer.Option(help='可以输入多个，使用逗号分隔')]=None,
     layout_model:Annotated[str|None,typer.Option(help='v2/v3/l/plus_l')]=None,
-    layout_model_path:Annotated[str|None,typer.Option(help='自训练的模型目录，必须包含inference.onnx')]|None=None,
+    layout_model_path:Annotated[str|None,typer.Option(help='自训练的模型目录，必须包含inference.onnx')]=None,
+    use_layout2:Annotated[bool|None,typer.Option(help='是否使用第二个layout模型')]=None,
     # all:Annotated[bool,typer.Option()]=None,
     md: Annotated[bool | None, typer.Option(help="生成markdown，默认为true")] = None,
     doc_json: Annotated[bool | None, typer.Option("--json", help="输出json，默认为true")] = None,
@@ -476,6 +477,9 @@ def parse(
     
     if html is not None:
         params.html = html
+
+    if use_layout2 is not None:
+        params.use_layout2=use_layout2
 
     docs: list[KDocumentFactory] = []
 

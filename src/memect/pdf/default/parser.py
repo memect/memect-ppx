@@ -72,6 +72,7 @@ class _OCRResult(TypedDict):
 
 class DefaultParserArgs(MyBaseModel):
     layout: str = "layout"
+    layout2:str="layout2"
     ocr: str = "ocr"
     formula: str = "formula"
     llm: str = "llm"
@@ -124,6 +125,11 @@ class DefaultParser:
         self._formula_key: Final = "cache/default/formula"
         self._ocr_model: Final = manager.get(self._args.ocr)
         self._ocr_key: Final = "cache/default/ocr"
+
+        #layout的辅助模型，辅助表格的识别
+        self._layout2_model:Final=manager.get(self._args.layout2)
+        self._layout2_key:Final="cache/default/layout2"
+
 
         self._pdf_parser: Final = PdfParser(self._args.pdf)
         self._table_parser: Final = TableParser(manager)
@@ -186,6 +192,32 @@ class DefaultParser:
                     ("vobjects", page.vobjects),
                     dir="debug/default/layout",
                 )
+
+        if doc.params.use_layout2:
+            #对于没有table的，现在使用第二个模型辅助
+            def handler(page:KPage):
+                table_count=0
+                for vobj in page.vobjects:
+                    if vobj.is_table():
+                        table_count+=1
+                if table_count>0:
+                    return None
+                #如果页面没有识别出表格，这里补充？
+                return [(page.file,page.cache)]
+
+            self._layout2_model.parse(doc,self._layout2_key,handler=handler)
+            for page in doc.working_pages:
+                data = page.cache.pop(self._layout2_key,None)
+                if data:
+                    #如果这个页面需要使用第二个layout辅助获得表格，获得的表格不一定100%准确
+                    #因为主要是支持[kev,value],[key,sep,value]表格
+                    page.load_layout(data,clear=False,types=['table'])
+                    if debugger.allow('draw',page=page.number):
+                        page.draw(
+                            ("raw_vobjects", page.raw_vobjects),
+                            ("vobjects", page.vobjects),
+                            dir="debug/default/layout2",
+                        )
 
     @log
     def _parse_pdf(self, doc: KDocument):

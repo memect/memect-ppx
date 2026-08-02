@@ -7,7 +7,7 @@ import threading
 import typing
 import uuid
 import weakref
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum, auto
 from functools import cached_property
 from pathlib import Path
@@ -15,12 +15,10 @@ from typing import (
     Any,
     ClassVar,
     Final,
-    Iterator,
-    Mapping,
     NotRequired,
     Self,
-    TypeGuard,
     TypedDict,
+    TypeGuard,
     cast,
     override,
 )
@@ -37,10 +35,9 @@ from memect.base.bbox import BBox, Point, Quad
 from memect.base.matrix import Matrix
 from memect.base.strs import NText
 from memect.base.utils import AutoCleaner, MyBaseModel, safe_write
-from memect.pdf.grid import Grid
 from memect.base.zip import Archiver
+from memect.pdf.grid import Grid
 from memect.pdf.sort import Sorter
-
 
 if typing.TYPE_CHECKING:
     from .model import ModelManager
@@ -178,6 +175,9 @@ class ApiParams(MyBaseModel):
     ocr: OCRMode = OCRMode.AUTO
 
     features:list[str]=Field(default_factory=list)
+
+    use_layout2:bool=False
+    """表示需要使用辅助layout"""
 
 
 class ParseParams(ApiParams):
@@ -1090,15 +1090,14 @@ class KPage:
         assert manager is not None
         return Parser(manager).parse_one(self,bbox,use_vobj=use_vobj,add=add,clear=clear,name=name,index=index)
 
-    def load_layout(self, data: Any, clear: bool = True):
-        """
-        载入模型，clear=True，表示清除之前的，如果需要合并多个不同的模型，设置为False
-        """
-        if clear:
-            self.raw_vobjects.clear()
+    def _load_layout(self,data:Any,types:Sequence[str]|None=None)->list['VObject']:
+        vobjects:list[VObject]=[]
         result: _LayoutResult = data
         m = Matrix.lt_to_lb((result["width"], result["height"]), self.size)
         for obj in result["objects"]:
+            if types and obj['type'] not in types:
+                continue
+
             if "quad" in obj:
                 quad = Quad.from_list(obj["quad"])
                 quad = quad.transform(m)
@@ -1123,8 +1122,21 @@ class KPage:
                 score=obj["score"],
                 raw_type=obj["raw_type"],
             )
-            self.raw_vobjects.append(vobj)
+            vobjects.append(vobj)
 
+        return vobjects
+
+    def load_layout(self, data: Any, clear: bool = True,*,types:Sequence[str]|None=None):
+        """
+        载入模型，clear=True，表示清除之前的，如果需要合并多个不同的模型，设置为False
+        """
+        new_vobjects=self._load_layout(data,types=types)
+
+        if not clear and not new_vobjects:
+            return
+        if clear:
+            self.raw_vobjects.clear()
+        self.raw_vobjects.extend(new_vobjects)
         # 更新对象
         self.vobjects.clear()
         self.vobjects.extend(self._filter_vobjects(self.raw_vobjects))
@@ -2296,8 +2308,9 @@ class KTextline(KObject):
             return groups
 
         def is_punctuation(s: str) -> bool:
-            from memect.base import strs
             import string
+
+            from memect.base import strs
 
             a, b = strs.to_bq(s)
             return a in string.punctuation
