@@ -598,12 +598,7 @@ class _YBTableLayout:
             return None
         if any(isinstance(obj,KTable) and obj.subtype=='layout' for obj in page.objects):
             return None
-        full_width = self._find_full_width_objects(page,page.objects,split)
-        objects = [
-            obj for obj in page.objects
-            if obj not in full_width
-            and not self._is_page_margin(page,obj.bbox)
-        ]
+        objects = self._get_continuation_objects(page,split)
         if not objects:
             return None
         left,right,spans = self._split_objects(page,objects,split)
@@ -633,6 +628,45 @@ class _YBTableLayout:
         left_bbox = BBox(ref_left.x0,content_bbox.y0,ref_left.x1,content_bbox.y1)
         right_bbox = BBox(ref_right.x0,content_bbox.y0,max(ref_right.x1,right_bbox.x1),content_bbox.y1)
         return left_bbox,right_bbox
+
+    def _get_continuation_objects(self,page:KPage,split:float)->list[KObject]:
+        objects = [
+            obj for obj in page.objects
+            if not self._is_page_margin(page,obj.bbox)
+        ]
+        stop_y = self._find_continuation_stop_y(page,objects,split)
+        if stop_y is not None:
+            objects = [
+                obj for obj in objects
+                if obj.bbox.y0>=stop_y-2
+            ]
+        full_width = self._find_full_width_objects(page,objects,split)
+        return [
+            obj for obj in objects
+            if obj not in full_width
+        ]
+
+    def _find_continuation_stop_y(self,page:KPage,objects:Sequence[KObject],split:float)->float|None:
+        # 续页一旦出现跨左右两列的正文/表格，说明上一页 layout 到这里结束。
+        # 返回跨列对象的上边界，只让其上方内容继续沿用上一页的列轴。
+        full_width = set(self._find_full_width_objects(page,objects,split))
+        _,_,spans = self._split_objects(page,objects,split)
+        blockers:set[KObject] = set(self._split_blockers(page,spans,()))
+        page_width = page.bbox.width
+        d = max(2,page_width*0.005)
+        for obj in objects:
+            bbox = obj.bbox
+            if (
+                bbox.x0<split-d
+                and bbox.x1>split+d
+                and bbox.width>page_width*0.18
+                and bbox.height>2
+            ):
+                blockers.add(obj)
+        blockers.update(full_width)
+        if not blockers:
+            return None
+        return max(obj.bbox.y1 for obj in blockers)
 
     def _can_continue_layout_from(self,page:KPage,bboxes:Sequence[BBox])->bool:
         # 真正的跨页 layout 在上一页通常会吃到页底附近；如果上一页下方还有
@@ -1048,12 +1082,7 @@ class _XYPJBGTableLayout(_YBTableLayout):
             return None
         if any(isinstance(obj,KTable) and obj.subtype=='layout' for obj in page.objects):
             return None
-        full_width = self._find_full_width_objects(page,page.objects,split)
-        objects = [
-            obj for obj in page.objects
-            if obj not in full_width
-            and not self._is_page_margin(page,obj.bbox)
-        ]
+        objects = self._get_continuation_objects(page,split)
         if not objects:
             return None
         left,right,spans = self._split_objects(page,objects,split)
