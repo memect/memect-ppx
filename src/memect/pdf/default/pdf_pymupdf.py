@@ -555,8 +555,13 @@ class Parser:
                             unicode,
                             bbox,
                         )
+                    elif 0xD800<=unicode<=0xDBFF or 0xDC00<=unicode<=0xDFFF:
+                        #高代理项 (High Surrogates)：范围 U+D800 到 U+DBFF。
+                        #低代理项 (Low Surrogates)：范围 U+DC00 到 U+DFFF
+                        self._logger.warning('surrogate字符，page=%s,font=%s,unicode=0x%04X,bbox=%s',kpage.number,span['font'],unicode,bbox)
                     else:
                         pass
+                
                 i = j
                 #print(text,bbox,color.rgba,is_stroked,is_filled,is_clipped)
                 kpage.pdf_chars.append(
@@ -881,7 +886,6 @@ class Parser:
                     new_paths.append(path)
                 elif not path['isrect'] and not path['stroked'] and path['alpha']>0:
                     #填充矩形，获得背景颜色
-                    #不一定为矩形，暂时就忽略了
                     #new_paths.append(path)
                     pass
                 else:
