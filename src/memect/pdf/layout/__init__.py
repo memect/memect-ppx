@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+from collections.abc import Mapping, Sequence
+from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Final, Literal, Mapping, NotRequired, Sequence, TypedDict
+from typing import Any, Final, Literal, NotRequired, TypedDict
 
 import cv2
 import numpy as np
 import yaml
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-
 
 PP_DOC_LAYOUT_V2_URL = (
     "https://www.modelscope.cn/models/RapidAI/RapidLayout/resolve/v1.2.0/"

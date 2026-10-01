@@ -275,6 +275,16 @@ settings: dict[str, Any] = {
                 # or layout_v3
                 "model": "layout",
             },
+            "layout2": {
+                "name": "layout2",
+                "max_workers": 0,
+                "use_process": False,
+                "scheduler": {
+                    "policy": "fifo",
+                    "max_task_size": 10,
+                },
+                "model": "layout2",
+            },
             "formula": {
                 "name": "formula",
                 # 如果使用的是llm，可以设置为4
@@ -321,10 +331,27 @@ settings: dict[str, Any] = {
                 "name": "LayoutModel",
                 "kwargs": {
                     # "model_path":get_model_path('./models/pp_layoutv2.onnx'),
-                    #"model_path":get_model_path('./models/pp_layoutv3.onnx'),
-                    #v2,v3,l,plus_l
-                    "version":"v2",
-                    "score_threshold":0.5,
+                    # "model_path":get_model_path('./models/pp_layoutv3.onnx'),
+                    # v2,v3,l,plus_l
+                    "version": "v2",
+                    # 为了支持募集说明书/年报等释义章节，容易丢失文本，设置为0.4，或者0.3如果需要表格的
+                    "score_threshold": 0.4,
+                    "engine": _layout_device["engine"],
+                    "use_cuda": _layout_device.get("use_cuda", False),
+                    "use_cann": _layout_device.get("use_cann", False),
+                    "use_dml": _layout_device.get("use_dml", False),
+                },
+            },
+            "layout2": {
+                "name": "YoloModel",
+                "kwargs": {
+                    #report or general
+                    "name": "general",
+                    #可以使用另外的模型+映射
+                    #"model_path":None,
+                    #"mapping":{},
+                    # 为了支持募集说明书/年报等释义章节，容易丢失文本，设置为0.4，或者0.3如果需要表格的
+                    "score_threshold": 0.4,
                     "engine": _layout_device["engine"],
                     "use_cuda": _layout_device.get("use_cuda", False),
                     "use_cann": _layout_device.get("use_cann", False),
@@ -334,7 +361,7 @@ settings: dict[str, Any] = {
             "table": {
                 "name": "TableModel",
                 "kwargs": {
-                    #"model_path": get_model_path("./models/memect/table_det.onnx"),
+                    # "model_path": get_model_path("./models/memect/table_det.onnx"),
                     "score_threshold": 0.5,
                     "engine": _table_device["engine"],
                     "use_cuda": _table_device.get("use_cuda", False),
@@ -482,7 +509,7 @@ settings: dict[str, Any] = {
                     #
                     # "class":"memect.features.feature1.Feature"
                 }
-            },
+            }
         },
         "tree": {
             # 跨页/跨栏文本合并

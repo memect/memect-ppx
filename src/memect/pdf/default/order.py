@@ -31,7 +31,8 @@ class ReadingOrder:
 
     def parse(self,doc:KDocument,max_workers:int=0):
         self._do(self._parse_page, doc.working_pages, max_workers=max_workers)
-        _TableLayout().parse(doc)
+        _YBTableLayout().parse(doc)
+        _XYPJBGTableLayout().parse(doc)
 
     def _parse_page(self,page:KPage):
         #TODO 如果是多页的，还需要考虑表格布局的情况，跨几页
@@ -428,7 +429,7 @@ class _TowCut:
         return groups
         
 
-class _TableLayout:
+class _YBTableLayout:
     _logger=logging.getLogger(f'{__module__}.{__qualname__}')
     _debugger=XDebugger(f'{__module__}.{__qualname__}')
     _front_page_limit:Final=4
@@ -542,10 +543,32 @@ class _TableLayout:
             prev_page = next_page
 
         #group_id = f'layout-{page.number}-{len(tables)}'
-        for table_index,(table_page,table_bboxes) in enumerate(tables):
+        aligned_tables = self._align_layout_bboxes(tables,split)
+        for table_index,(table_page,table_bboxes) in enumerate(aligned_tables):
             table = self._make_table(table_page,table_bboxes)
 
         return index+len(tables)
+
+    def _align_layout_bboxes(
+        self,
+        tables:Sequence[tuple[KPage,tuple[BBox,BBox]]],
+        split:float,
+    )->list[tuple[KPage,tuple[BBox,BBox]]]:
+        if not tables:
+            return []
+        table_x0 = min(min(left.x0,right.x0) for _,(left,right) in tables)
+        table_x1 = max(max(left.x1,right.x1) for _,(left,right) in tables)
+        split_x = split
+        if split_x<=table_x0 or split_x>=table_x1:
+            split_x = (table_x0+table_x1)/2
+
+        aligned:list[tuple[KPage,tuple[BBox,BBox]]]=[]
+        for table_page,(left,right) in tables:
+            table_bbox = BBox.join((left,right))
+            left_bbox = BBox(table_x0,table_bbox.y0,split_x,table_bbox.y1)
+            right_bbox = BBox(split_x,table_bbox.y0,table_x1,table_bbox.y1)
+            aligned.append((table_page,(left_bbox,right_bbox)))
+        return aligned
 
     def _find_layout_columns(self,page:KPage)->tuple[float,tuple[BBox,BBox]]|None:
         if self._is_toc_page(page):
@@ -575,12 +598,7 @@ class _TableLayout:
             return None
         if any(isinstance(obj,KTable) and obj.subtype=='layout' for obj in page.objects):
             return None
-        full_width = self._find_full_width_objects(page,page.objects,split)
-        objects = [
-            obj for obj in page.objects
-            if obj not in full_width
-            and not self._is_page_margin(page,obj.bbox)
-        ]
+        objects = self._get_continuation_objects(page,split)
         if not objects:
             return None
         left,right,spans = self._split_objects(page,objects,split)
@@ -610,6 +628,45 @@ class _TableLayout:
         left_bbox = BBox(ref_left.x0,content_bbox.y0,ref_left.x1,content_bbox.y1)
         right_bbox = BBox(ref_right.x0,content_bbox.y0,max(ref_right.x1,right_bbox.x1),content_bbox.y1)
         return left_bbox,right_bbox
+
+    def _get_continuation_objects(self,page:KPage,split:float)->list[KObject]:
+        objects = [
+            obj for obj in page.objects
+            if not self._is_page_margin(page,obj.bbox)
+        ]
+        stop_y = self._find_continuation_stop_y(page,objects,split)
+        if stop_y is not None:
+            objects = [
+                obj for obj in objects
+                if obj.bbox.y0>=stop_y-2
+            ]
+        full_width = self._find_full_width_objects(page,objects,split)
+        return [
+            obj for obj in objects
+            if obj not in full_width
+        ]
+
+    def _find_continuation_stop_y(self,page:KPage,objects:Sequence[KObject],split:float)->float|None:
+        # 续页一旦出现跨左右两列的正文/表格，说明上一页 layout 到这里结束。
+        # 返回跨列对象的上边界，只让其上方内容继续沿用上一页的列轴。
+        full_width = set(self._find_full_width_objects(page,objects,split))
+        _,_,spans = self._split_objects(page,objects,split)
+        blockers:set[KObject] = set(self._split_blockers(page,spans,()))
+        page_width = page.bbox.width
+        d = max(2,page_width*0.005)
+        for obj in objects:
+            bbox = obj.bbox
+            if (
+                bbox.x0<split-d
+                and bbox.x1>split+d
+                and bbox.width>page_width*0.18
+                and bbox.height>2
+            ):
+                blockers.add(obj)
+        blockers.update(full_width)
+        if not blockers:
+            return None
+        return max(obj.bbox.y1 for obj in blockers)
 
     def _can_continue_layout_from(self,page:KPage,bboxes:Sequence[BBox])->bool:
         # 真正的跨页 layout 在上一页通常会吃到页底附近；如果上一页下方还有
@@ -647,6 +704,11 @@ class _TableLayout:
         )
 
     def _make_table(self,page:KPage,bboxes:Sequence[BBox])->KTable|None:
+        return self._make_two_column_table(page,bboxes)
+
+    def _make_two_column_table(self,page:KPage,bboxes:Sequence[BBox])->KTable|None:
+        if len(bboxes)!=2:
+            return None
         debugger = self._debugger.bind(page=page.number)
         cells:list[KCell]=[]
         selected:list[KObject]=[]
@@ -660,6 +722,8 @@ class _TableLayout:
             return
         insert_index = min(page.objects.index(obj) for obj in selected)
         table = KTable(page,BBox.join(bboxes),cells=cells,subtype='layout')
+        if table.row_num!=1 or table.col_num!=2:
+            return None
         table.adjust()
         if self._has_right_cell_left_overflow(page,table):
             return None
@@ -951,3 +1015,150 @@ class _TableLayout:
             else:
                 add_obj(item)
         return '\n'.join(buf)
+
+
+class _XYPJBGTableLayout(_YBTableLayout):
+    _logger=logging.getLogger(f'{__module__}.{__qualname__}')
+    _debugger=XDebugger(f'{__module__}.{__qualname__}')
+    _front_page_limit:Final=6
+
+    def _is_yb(self,doc:KDocument):
+        return self._is_xypjbg(doc)
+
+    def _is_xypjbg(self,doc:KDocument):
+        """判断是否为信用评级报告。"""
+        score = 0
+        pages = [
+            page for page in doc.working_pages
+            if page.number<=self._front_page_limit
+        ]
+        text = self._get_text(pages)
+        if not text:
+            return False
+        rules:tuple[tuple[str,int],...]=(
+            ('跟踪评级报告',4),
+            ('信用评级报告',4),
+            ('联合资信',4),
+            ('联合信用',3),
+            ('评级结果',3),
+            ('评级观点',3),
+            ('评级历史',3),
+            ('债项概况',3),
+            ('评级展望',2),
+            ('债券简称',2),
+            ('债券余额',2),
+            ('发行规模',1),
+            ('到期兑付日',1),
+            ('公开发行可转换公司债券',2),
+            ('主要财务数据',2),
+            ('评级方法',2),
+            ('评级模型',2),
+            ('优势',1),
+            ('关注',1),
+            ('China Lianhe Credit Rating',3),
+            ('lhratings.com',2),
+        )
+        for word,weight in rules:
+            if word in text:
+                score+=weight
+        if '评级' in text and ('报告' in text or '展望' in text):
+            score+=2
+        if ('联合资信' in text or '联合信用' in text) and '评级' in text:
+            score+=2
+        return score>=8
+
+    def _can_continue_layout_from(self,page:KPage,bboxes:Sequence[BBox])->bool:
+        # 信用评级报告的右栏正文/财务表经常跨页，上一页底部留白略大时
+        # 仍可能是同一组左右栏版式的延续。
+        bbox = BBox.join(bboxes)
+        return bbox.y0<=page.bbox.y0+page.bbox.height*0.28
+
+    def _make_table(self,page:KPage,bboxes:Sequence[BBox])->KTable|None:
+        # 信用评级报告这里的 layout table 只表达左右栏，不按纵向内容再切行。
+        return self._make_two_column_table(page,bboxes)
+
+    def _find_continuation_columns(self,page:KPage,ref_bboxes:tuple[BBox,BBox],split:float)->tuple[BBox,BBox]|None:
+        if self._is_toc_page(page):
+            return None
+        if any(isinstance(obj,KTable) and obj.subtype=='layout' for obj in page.objects):
+            return None
+        objects = self._get_continuation_objects(page,split)
+        if not objects:
+            return None
+        left,right,spans = self._split_objects(page,objects,split)
+        ref_left,ref_right = ref_bboxes
+        left = [
+            obj for obj in left
+            if obj.bbox.over('x',ref_left,d=14)
+        ]
+        right = [
+            obj for obj in right
+            if obj.bbox.over('x',ref_right,d=14)
+        ]
+        if not right:
+            return None
+        right_bbox = BBox.join2(right)
+        if right_bbox.x1<=split:
+            return None
+        if right_bbox.width<ref_right.width*0.20 and len(right)<2:
+            return None
+        if self._split_blockers(page,spans,()):
+            return None
+        content_bbox = BBox.join2([*left,*right],strict=False)
+        if content_bbox is None:
+            return None
+
+        left_bbox = BBox(ref_left.x0,content_bbox.y0,ref_left.x1,content_bbox.y1)
+        right_bbox = BBox(ref_right.x0,content_bbox.y0,max(ref_right.x1,right_bbox.x1),content_bbox.y1)
+        return left_bbox,right_bbox
+
+    def _is_layout(self,page:KPage,left:Sequence[KObject],right:Sequence[KObject])->bool:
+        if len(left)<1 or len(right)<1:
+            return False
+        left_bbox = BBox.join2(left,strict=False)
+        right_bbox = BBox.join2(right,strict=False)
+        if left_bbox is None or right_bbox is None:
+            return False
+        min_column_width = max(32,page.bbox.width*0.08)
+        if min(left_bbox.width,right_bbox.width)<min_column_width:
+            return False
+        if right_bbox.x0-left_bbox.x1<1:
+            return False
+        overlap = self._overlap_ratio(left_bbox,right_bbox,axis='y')
+        if overlap<0.18:
+            return False
+        sidebar_score = self._sidebar_score(left,right)
+        if sidebar_score<=0:
+            return False
+        width_ratio = min(left_bbox.width,right_bbox.width)/max(left_bbox.width,right_bbox.width)
+        return width_ratio<0.90 or sidebar_score>=3 or self._side_panel_score(page,left_bbox,right_bbox,left,right)>0
+
+    def _sidebar_score_of(self,objs:Sequence[KObject])->int:
+        text = self._get_text(objs)
+        result = 0
+        for word in (
+            '评级结果','债项概况','跟踪评级债项概况','评级历史','评级方法','评级模型',
+            '本次评级','上次评级','评级展望','评级时间','债券简称','发行规模','债券余额',
+            '到期兑付日','指标评级','调整因素','调整子级','分析师','邮箱',
+            '电话','传真','地址','网址','www.lhratings.com','主要财务数据','合并口径',
+            '公司本部','母公司','资产总额','全部债务','营业收入','利润总额',
+        ):
+            if word in text:
+                result+=1
+        return result
+
+    def _side_panel_score(self,page:KPage,left_bbox:BBox,right_bbox:BBox,left:Sequence[KObject],right:Sequence[KObject])->float:
+        page_width = page.bbox.width
+        left_width_ratio = left_bbox.width/page_width
+        right_width_ratio = right_bbox.width/page_width
+        score = 0.0
+
+        if left_width_ratio<=0.46 and right_bbox.width>=page_width*0.32:
+            score+=16+self._sidebar_score_of(left)*4
+            if left_bbox.x0<=page.bbox.x0+page_width*0.24:
+                score+=8
+        if right_width_ratio<=0.46 and left_bbox.width>=page_width*0.32:
+            score+=16+self._sidebar_score_of(right)*4
+            if right_bbox.x1>=page.bbox.x1-page_width*0.12 or right_bbox.x0>=page.bbox.x0+page_width*0.52:
+                score+=8
+        return score

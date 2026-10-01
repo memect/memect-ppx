@@ -12,6 +12,7 @@ import typer
 
 from .pdf.base import Backend, OCRMode, ParseMode, TableMode, TreeBackend
 from .train.layout import layout as layout_train_command
+from .train.table import app as table_app
 
 app:Final= typer.Typer()
 train_app: Final = typer.Typer(help="训练")
@@ -20,6 +21,7 @@ train_app.command("layout", help="基于PP-DocLayout预标注并训练版面检�
     layout_train_command
 )
 app.add_typer(train_app, name="train")
+app.add_typer(table_app,name='table')
 _DOCTOR_DEFAULT = "__ppx_default_doctor__"
 _AGENT_DEFAULT = "./agent.json"
 
@@ -339,7 +341,8 @@ def parse(
     tree:Annotated[TreeBackend|None,typer.Option(help='如何解析章节树')]=None,
     feature:Annotated[str|None,typer.Option(help='可以输入多个，使用逗号分隔')]=None,
     layout_model:Annotated[str|None,typer.Option(help='v2/v3/l/plus_l')]=None,
-    layout_model_path:Annotated[str|None,typer.Option(help='自训练的模型目录，必须包含inference.onnx')]|None=None,
+    layout_model_path:Annotated[str|None,typer.Option(help='自训练的模型目录，必须包含inference.onnx')]=None,
+    use_layout2:Annotated[bool|None,typer.Option(help='是否使用第二个layout模型')]=None,
     # all:Annotated[bool,typer.Option()]=None,
     md: Annotated[bool | None, typer.Option(help="生成markdown，默认为true")] = None,
     doc_json: Annotated[bool | None, typer.Option("--json", help="输出json，默认为true")] = None,
@@ -474,6 +477,9 @@ def parse(
     
     if html is not None:
         params.html = html
+
+    if use_layout2 is not None:
+        params.use_layout2=use_layout2
 
     docs: list[KDocumentFactory] = []
 
