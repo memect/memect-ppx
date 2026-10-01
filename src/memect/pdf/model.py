@@ -3,10 +3,11 @@ import multiprocessing as mp
 import threading
 import time
 import weakref
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Final, Mapping, Sequence, final, override
+from typing import Any, ClassVar, Final, final, override
 
 import cv2
 import numpy as np
@@ -460,8 +461,8 @@ class LayoutModel(Model):
 
         with self._lock:
             if self._model is None:
-                from memect.pdf.layout import LayoutDetector
                 from memect.models import get_model_path
+                from memect.pdf.layout import LayoutDetector
 
                 timer = Timer.start()
                 params: dict[str, Any] = {}
@@ -470,15 +471,23 @@ class LayoutModel(Model):
                 version = params.get("version")
                 if not model_path:
                     if version == "v2":
-                        model_path = get_model_path("PP-DocLayout-V2") /"inference.onnx"
+                        model_path = (
+                            get_model_path("PP-DocLayout-V2") / "inference.onnx"
+                        )
                     elif version == "v3":
-                        model_path = get_model_path("PP-DocLayout-V3") /"inference.onnx"
+                        model_path = (
+                            get_model_path("PP-DocLayout-V3") / "inference.onnx"
+                        )
                     elif version == "l":
                         model_path = get_model_path("PP-DocLayout-L") / "inference.onnx"
                     elif version == "plus_l":
-                        model_path = get_model_path("PP-DocLayout_plus-L") / "inference.onnx"
+                        model_path = (
+                            get_model_path("PP-DocLayout_plus-L") / "inference.onnx"
+                        )
                     elif version == "auto":
-                        model_path = get_model_path("PP-DocLayout-V3") / "inference.onnx"
+                        model_path = (
+                            get_model_path("PP-DocLayout-V3") / "inference.onnx"
+                        )
                     else:
                         raise ValueError(f"不支持的version:{version}")
                     params["model_path"] = model_path
@@ -503,6 +512,89 @@ class LayoutModel(Model):
         return results
 
 
+class YoloModel(Model):
+    _logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    _use_lock = False
+
+    def __init__(self, **kwargs: Any):
+        super().__init__()
+        self._model: Any = None
+       
+
+        def get_mapping(name: str) -> dict[str, Any]:
+            if name == "report":
+                return {
+                    "Text": "text",
+                    "Title": "title",
+                    "Figure": "figure",
+                    "Figure caption": "title",
+                    "Table": "table",
+                    "Table caption": "title",
+                    "Header": "header",
+                    "Footer": "footer",
+                    "TOC": "toc",
+                }
+            elif name == "general":
+                return {
+                    "Text": "text",
+                    "Title": "title",
+                    "Figure": "figure",
+                    "Table": "table",
+                    "Equation": "formula",
+                    "Caption": "title",
+                }
+            else:
+                return {}
+
+        from memect.models import get_model_path
+        name = kwargs.pop('name',None)
+        model_path = kwargs.get("model_path",None)
+        mapping = kwargs.pop('mapping',None) or get_mapping(name)
+        if not model_path:
+            if name == "report":
+                model_path = (
+                    get_model_path("360") / "report-8n.onnx"
+                )
+            elif name == "general":
+                model_path = (
+                    get_model_path("360") / "general6-8n.onnx"
+                )
+            else:
+                raise ValueError(f"不支持的name:{name}")
+
+            kwargs['model_path']=model_path
+
+        self._mapping:Final = mapping
+        self._model_kwargs:Final = kwargs
+        
+    @override
+    def _execute(self, files: Sequence[FileInfo]):
+        with self._lock:
+            if self._model is None:
+                from memect.pdf.layout.yolo import YOLOLayoutDetector
+                timer = Timer.start()
+                params: dict[str, Any] = {}
+                params.update(self._model_kwargs)
+                self._model = YOLOLayoutDetector(**params)
+                self._logger.info("load yolo layout model,elapsed=%.3f", timer.elapsed())
+
+        results: list[Any] = []
+        for file in files:
+            output = self._model(file.file)
+            size = file.size
+            new_objs: list[Any] = []
+            for obj in output["objects"]:
+                new_obj = {}
+                new_obj["type"] = self._mapping.get(obj["type"]) or obj["type"]
+                new_obj["bbox"] = obj["bbox"]
+                new_obj["score"] = obj["score"]
+                new_obj["raw_type"] = obj["type"]
+                new_objs.append(new_obj)
+
+            results.append({"objects": new_objs, "width": size[0], "height": size[1]})
+        return results
+
+
 class OCRModel(Model):
     _logger = logging.getLogger(f"{__module__}.{__qualname__}")
 
@@ -512,8 +604,9 @@ class OCRModel(Model):
         self._model: Any = None
 
     def _execute(self, files: Sequence[FileInfo]):
-        from .ocr import PPOCRv6OCR
         from memect.models import get_ocr_path
+
+        from .ocr import PPOCRv6OCR
 
         det_score_threshold = self._model_kwargs.get("det_score_threshold")
         with self._lock:
@@ -781,8 +874,9 @@ class TableModel(Model):
     def _execute(self, files: Sequence[FileInfo]):
         with self._lock:
             if self._model is None:
-                from .table_det import RTDETRTableCellDet
                 from memect.models import get_model_path
+
+                from .table_det import RTDETRTableCellDet
 
                 if not self._model_path:
                     model_path = get_model_path("table_det.onnx")

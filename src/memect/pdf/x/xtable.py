@@ -1235,6 +1235,12 @@ class _Builder:
             else:
                 return False
 
+        def case_layout(i:int):
+            c1,c2=align_cells[i]
+            if c1.table.is_layout() and c2.table.is_layout() and c1.col_span==1 and c2.col_span==1:
+                C(c2).merged=True
+                C(c2).reason='layout表格，总是合并'
+            pass
         def case0(i: int):
             """单行"""
             # 案例1:
@@ -1774,6 +1780,7 @@ class _Builder:
             # 模拟人类的思维，在大脑中拥有了相关的知识，然后扫描相邻的上下行，判断是否需要合并
             # 大脑会优先最可能的方案先判断
             cases = [
+                case_layout,
                 case0,
                 case1,
                 case2,

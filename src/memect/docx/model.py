@@ -234,7 +234,7 @@ class TableCell:
     row_index: int | None = None
     col_index: int | None = None
     shading: str | None = None
-    vertical_align: VerticalAlignment | None = None
+    vertical_align: VerticalAlignment | None = "center"
     document: Document | None = field(default=None, repr=False, compare=False)
 
     def add_paragraph(
@@ -242,7 +242,7 @@ class TableCell:
         text: str = "",
         *,
         style: str | None = None,
-        alignment: Alignment | None = None,
+        alignment: Alignment | None = "center",
     ) -> Paragraph:
         paragraph = Paragraph(style=style, format=ParagraphFormat(alignment=alignment))
         if text:
